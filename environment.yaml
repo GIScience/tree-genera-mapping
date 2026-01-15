@@ -1,13 +1,13 @@
 name: map-tree-genera
 channels:
-  - pytorch
   - conda-forge
+  - pytorch
 dependencies:
   - python=3.11.4
   - pip
   # ---- numeric / ML ----
-  - numpy=1.25.4
-  - scipy=1.16.1
+  - numpy=1.25.*
+  - scipy>=1.16.*
   - scikit-learn=1.7.1
   - pandas=2.3.2
   # ---pytorch----
