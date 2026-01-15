@@ -132,14 +132,6 @@ This repository accompanies:
 
 ## 📖 Citation
 If you use this code or workflow, please cite the accompanying paper:
-``` bibtex
-@article{grinblat2025urbangreenspaces,
-  title   = {Tree Genera Mapping of Baden-Württemberg Using Multispectral Imagery and LiDAR},
-  author  = {Grinblat, Yulia, Fulman, Nir},
-  journal = {Scientific Data},
-  year    = {2026}
-}
-```
 See ```CITATION.cff``` for details.
 
 ## 📜 License
