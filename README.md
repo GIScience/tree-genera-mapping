@@ -23,7 +23,7 @@ The code accompanies an upcoming **open dataset and scientific publication** on 
 ## 🚀 Quickstart: 
 Clone the repository:
 ```bash
-git clone https://github.com/solo2307/greenspaces
+git clone https://github.com/GIScience/tree-genera-mapping
 cd greenspaces
 ```
 Create and activate a Conda environment:

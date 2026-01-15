@@ -1,3 +1,7 @@
 
 9
 	README.md,8/e/8ec9a00bfd09b3190ac6b22251dbb1aa95a0579d
+@
+environment.yaml,6/a/6ad41f52890403a31a09539299178d41f136c7c0
+<
+CITATION.cff,2/f/2f473ef69010f24d2546e13263bcc2c49befd2f3

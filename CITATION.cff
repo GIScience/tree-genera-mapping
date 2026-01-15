@@ -1,0 +1,28 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: 'Tree Genera Mapping: Urban Tree Crown Detection & Genus Mapping of Baden-Württemberg, Germany'
+message: >-
+  If you use this dataset, please cite it using the metadata
+  from this file.
+type: dataset
+authors:
+  - given-names: Yulia
+    family-names: Grinblat
+    name-suffix: Dr.
+    email: yulia.grinblat@heigit.org
+  - given-names: Nir
+    family-names: Fulman
+    name-suffix: Dr.
+    email: fulmannir@gmail.com
+date-released: 2026-01-26
+url: "https://github.com/GIScience/tree-genera-mapping"
+license: AGPL-3.0
+repository-code: "https://github.com/GIScience/tree-genera-mapping"
+keywords:
+  - "YOLOv11"
+  - "Tree detection"
+  - "Genera Classification"
+  - "Remote sensing"
+  - "Deep learning"
