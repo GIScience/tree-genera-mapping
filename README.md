@@ -8,8 +8,8 @@
 > 
 ![urban-green-spaces.jpeg](misc%2Furban-green-spaces.jpeg)
 
-##  ✨Overview
-UrbanGreenSpaces provides an end-to-end, research-oriented workflow to:
+##  Overview
+TreeGeneraMapping provides an end-to-end, research-oriented workflow to:
 - Download and preprocess **LGL Open GeoData** (multi-spectral orthophotos & nDSM).  
 - Build **5-channel raster tiles** (RGB + NIR + normalized height). 
 - Perform **tree crown delineation and detection**
@@ -18,12 +18,12 @@ UrbanGreenSpaces provides an end-to-end, research-oriented workflow to:
 - Scale inference to **statewide coverage**
 - Export results as **GeoPackage** for GIS analysis
 
-The code accompanies an upcoming **open dataset and scientific publication** on regional-scale tree genera mapping in Baden-Württemberg.
+The code accompanies an upcoming **open dataset and scientific publication** on regional-scale tree genera mapping in Baden-Württemberg, Germany.
 
-## 🧠 Method Workflow
+## Method Workflow
 ![greenspace_workflow.png](misc%2Fgreenspace_workflow.png)
 
-## 🚀 Quickstart: 
+## Quickstart: 
 Clone the repository:
 ```bash
 git clone https://github.com/GIScience/tree-genera-mapping
@@ -35,20 +35,17 @@ conda env create -f environment.yaml
 conda activate map-tree-genera
 ```
 
-
-
-## 📊 Model Checkpoints
+## Model Checkpoints
 | Task                    | Model Name | Modification    | URL Link                                                           |
 |-------------------------|------------|-----------------|--------------------------------------------------------------------|
 | Object Detection        | YOLO11l    | 5-Channel Input |    |
 | Object Detection (tree) | YOLO11l    | 5-Channel Input | |
 | Image Classification    | ResNet | 5-Channel Input | |
 
-## 🔬Dataset & Paper
+## Dataset & Paper
 This repository accompanies:
 - **Dataset**: {add}
 - **Paper**: {add}
 
-## 📖 Citation
-If you use this code or workflow, please cite the accompanying paper:
+If you use this code or workflow, please cite the accompanying paper.
 See ```CITATION.cff``` for details.
