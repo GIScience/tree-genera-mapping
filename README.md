@@ -36,12 +36,12 @@ conda activate map-tree-genera
 ```
 
 ## Model Checkpoints
-| Task                    | Model Name | Modification    | URL Link                                                           |
-|-------------------------|------------|-----------------|--------------------------------------------------------------------|
-| Object Detection        | YOLO11l    | 5-Channel Input |  https://huggingface.co/solo2307/urban-tree-genera/tree/main  |
-| Object Detection (tree) | YOLO11l    | 5-Channel Input | |
-|  Object Detection (tree) | FasteRCNN  | 5-Channel Input ||
-| Image Classification    | ResNet     | 5-Channel Input | |
+| Task                    | Model Name | Modification    | URL Link                                                                             |
+|-------------------------|------------|-----------------|--------------------------------------------------------------------------------------|
+| Object Detection        | YOLO11l    | 5-Channel Input | [yolo11l_tree_genus.pt](https://huggingface.co/solo2307/urban-tree-genera/tree/main) |
+| Object Detection (tree) | YOLO11l    | 5-Channel Input | [yolo11l_tree.pt](https://huggingface.co/solo2307/urban-tree-genera/tree/main)       |
+|  Object Detection (tree) | FasteRCNN  | 5-Channel Input |                                                                                      |
+| Image Classification    | ResNet     | 5-Channel Input |                                                                                      |
 
 
 ## Dataset & Paper
