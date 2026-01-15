@@ -6,7 +6,7 @@
 
 > The multispectral aerial imagery and LiDAR data provided by the **LGL Open GeoData-Portal** https://www.lgl-bw.de/Produkte/Open-Data/ 
 > 
-![urban-green-spaces.jpeg](docs%2Furban-green-spaces.jpeg)
+![logo.png](docs%2Flogo.png)
 
 ##  Overview
 TreeGeneraMapping provides an end-to-end, research-oriented workflow to:
