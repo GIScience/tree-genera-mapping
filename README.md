@@ -24,12 +24,12 @@ The code accompanies an upcoming **open dataset and scientific publication** on 
 Clone the repository:
 ```bash
 git clone https://github.com/GIScience/tree-genera-mapping
-cd greenspaces
+cd tree-genera-mapping
 ```
 Create and activate a Conda environment:
 ```bash
 conda env create -f environment.yaml
-conda activate map-green-spaces
+conda activate map-tree-genera
 ```
 ## 🧠 Method Summary
 ![greenspace_workflow.png](misc%2Fgreenspace_workflow.png)
@@ -86,7 +86,7 @@ Generation of regional tree genera maps
 
 ## 📂 Repository Structure
 ```pgsql
-greenspaces/
+tree-genera-mapping/
 │
 ├── research_code/
 │ ├── ops/ # Downloaders, data handling
