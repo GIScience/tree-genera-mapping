@@ -140,7 +140,7 @@ def run_inference_on_tile(model, tile_path, out_dir, patch_size=640, stride=512,
         logger.info(f"✅ Saved {len(records)} detections to {out_file}")
     else:
         logger.warning(f"⚠️ No detections for {tile_path}")
-def run(ckpt_path: str, #"/Volumes/sd17f001/ygrin/silverways/greenspaces/experiments_checkpoints/yolo-runs/detect/y11l_rgbih_genus_1024/weights/best.pt"
+def run(ckpt_path: str,
         tile_id:str,
         tile_dir:str,
         output_dir:str):
