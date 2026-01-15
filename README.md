@@ -4,9 +4,9 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
 > A research pipeline for large-scale urban tree crown detection and tree genus mapping using very-high-resolution multispectral aerial imagery and LiDAR data.
 
-> UrbanGreen associated with the mapping of urban green spaces from multispectral aerial imagery and LiDAR data provided by the **LGL Open GeoData-Portal** https://www.lgl-bw.de/Produkte/Open-Data/ 
+> The multispectral aerial imagery and LiDAR data provided by the **LGL Open GeoData-Portal** https://www.lgl-bw.de/Produkte/Open-Data/ 
 > 
-![urban-green-spaces.jpeg](misc%2Furban-green-spaces.jpeg)
+![urban-green-spaces.jpeg](docs%2Furban-green-spaces.jpeg)
 
 ##  Overview
 TreeGeneraMapping provides an end-to-end, research-oriented workflow to:
@@ -21,7 +21,7 @@ TreeGeneraMapping provides an end-to-end, research-oriented workflow to:
 The code accompanies an upcoming **open dataset and scientific publication** on regional-scale tree genera mapping in Baden-Württemberg, Germany.
 
 ## Method Workflow
-![greenspace_workflow.png](misc%2Fgreenspace_workflow.png)
+![overview_workflow.png](docs%2Foverview_workflow.png)
 
 ## Quickstart: 
 Clone the repository:
