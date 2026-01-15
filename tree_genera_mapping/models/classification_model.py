@@ -212,7 +212,7 @@ def get_rgbih_fusion(model_name="resnet101", num_classes=10, pretrained=True):
 
 
 if __name__=='__main__':
-    from tree_genera_mapping.models.model_summary import summary
+    from tree_genera_mapping.models.summaries import summary
 
     print("\n🌿 Summary for RGBIHeight model")
     model1 = get_resnet5ch(model_name="resnet101", num_classes=5)
