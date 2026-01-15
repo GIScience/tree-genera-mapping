@@ -1,4 +1,4 @@
-# Tree Genera Mapping in Baden-Württemberg, Germany
+# Urban Tree Genera Mapping in Baden-Württemberg, Germany
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL3.0-green.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
@@ -9,7 +9,7 @@
 ![logo.png](docs%2Flogo.png)
 
 ##  Overview
-TreeGeneraMapping provides an end-to-end, research-oriented workflow to:
+Urban Tree Genera Mapping provides an end-to-end, research-oriented workflow to:
 - Download and preprocess **LGL Open GeoData** (multi-spectral orthophotos & nDSM).  
 - Build **5-channel raster tiles** (RGB + NIR + normalized height). 
 - Perform **tree crown delineation and detection**
@@ -40,7 +40,9 @@ conda activate map-tree-genera
 |-------------------------|------------|-----------------|--------------------------------------------------------------------|
 | Object Detection        | YOLO11l    | 5-Channel Input |    |
 | Object Detection (tree) | YOLO11l    | 5-Channel Input | |
-| Image Classification    | ResNet | 5-Channel Input | |
+|  Object Detection (tree) | FasteRCNN  | 5-Channel Input ||
+| Image Classification    | ResNet     | 5-Channel Input | |
+
 
 ## Dataset & Paper
 This repository accompanies:
