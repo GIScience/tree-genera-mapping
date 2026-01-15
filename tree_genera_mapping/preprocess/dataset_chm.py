@@ -523,51 +523,6 @@ def tree_canopy(output_dir='cache/canopy_height',
     print(skipped)
 
 
-def main(dom_dgm_dir: str = '/Users/ygrinblat/Documents/HeiGIT_Projects/green_spaces/Data/nDSM1m/DOM',
-         dop_dir: str = '/Users/ygrinblat/Documents/HeiGIT_Projects/green_spaces/Data/DOP20',
-         chm_dir: str = 'cache/canopy_height'):
-    """
-        Examples to create Canopy Height Model based on LGL BW Geoportal Data
-        1: Create nDSM = DSM - DEM
-            a: Select all high objects, H>2m - all values low are none
-        2. Create NDVI from DOP20
-            a: Make mask for vegetation NDVI>0.3
-        4. Clip mask from nDSM
-        5. apply Watershed model to assess number of trees.
-        6. Results: XY tree, Polygon of a canopy with area, diameter and height of a tree
-        Assumption: Good alignment
-        """
-    # Run the pairing function
-    pairs, unmatched_files = pair_dgm_dom([file.name for file in Path(dom_dgm_dir).glob('*.zip')])
-    # Run unzip for each pair
-    process_ndsm(input_dir=dom_dgm_dir, pairs=pairs)
-    # Process NDVI
-    process_ndvi(input_dir=Path(dop_dir))
-    # Threshold of Crop Height Model and NDVI
-    for dir, res in zip(['cache/ndvi', 'cache/height'], [1.0, None]):
-        imgs = list(Path(dir).glob('*.tif'))
-        for img in tqdm.tqdm(imgs, total=len(imgs)):
-            _ = apply_treshold(image=img,
-                               output_mask_path=f"cache/mask_{dir.split('/')[-1]}",
-                               resolution=res,
-                               threshold=2)
-
-    # Clip height mask by ndvi mask
-    tree_canopy(output_dir=chm_dir,
-                ndvi_dir='cache/mask_ndvi',
-                height_dir='cache/mask_height'
-                )
-    # Apply local peak to detect xy trees and height
-
-    trees_dir = 'cache/trees'
-    chms = list(Path(chm_dir).glob('*.tif'))
-    # Example usage
-    for chm in tqdm.tqdm(chms, total=len(chms)):
-        process_trees(chm_img=str(chm),
-                      output_geojson_path=f'{trees_dir}/{chm.name[:-4]}.geojson',
-                      min_tree_area=4,
-                      min_distance=5
-                      )
 
 
 def process_trees(chm_img: str = 'cache/canopy_height.tif',
@@ -639,113 +594,51 @@ def process_trees(chm_img: str = 'cache/canopy_height.tif',
         print(f"Empty: {output_geojson_path} is not created")
 
 
-def height_validation(trees_dir: str, buffer_m: int = 5,
-                      trees_true: str = "/Users/ygrinblat/Documents/HeiGIT_Projects/green_spaces/Data/tree-export_detail/tree-export.shp",
-                      output_path: str = "cache/trees/closest_single_trees.gpkg"
-                      ):
-    # read trees into one file
-    trees = list(Path(trees_dir).glob("*.geojson"))
-    tree_list = []
-    for tree_file in tqdm.tqdm(trees, total=len(trees)):
-        try:
-            gdf = gpd.read_file(str(tree_file))
-            if not gdf.empty:
-                tree_list.append(gdf)
-        except Exception as e:
-            print(f"Failed to load {tree_file}: {e}")
-
-    # Combine all loaded GeoDataFrames
-    if tree_list:
-        gdf_pred = gpd.GeoDataFrame(pd.concat(tree_list, ignore_index=True), crs=tree_list[0].crs)
-    else:
-        print("No valid tree data loaded.")
-    # Select trees close to the True dataset
-    gdf_true = gpd.read_file(trees_true)
-    gdf_true = gdf_true.to_crs(epsg=3857)
-    # Ensure both GeoDataFrames use the same CRS
-    if gdf_pred.crs != gdf_true.crs:
-        gdf_pred = gdf_pred.to_crs(gdf_true.crs)
-    # Prepare columns for the nearest tree data
-    gdf_true['nearest_tree_id'] = None
-    gdf_true['nearest_tree_height'] = None
-    gdf_true['distance_to_tree'] = None
-
-    # Calculate the nearest tree within a 5-meter buffer
-    for idx, true_tree in gdf_true.iterrows():
-        # Create a 5-meter buffer around the true tree
-        buffer = true_tree['geometry'].buffer(buffer_m)
-
-        # Find predicted trees within the buffer
-        nearby_trees = gdf_pred[gdf_pred['geometry'].within(buffer)]
-
-        if not nearby_trees.empty:
-            # Calculate distances to the true tree
-            nearby_trees['distance'] = nearby_trees['geometry'].distance(true_tree['geometry'])
-            # Get the nearest tree
-            nearest_tree = nearby_trees.loc[nearby_trees['distance'].idxmin()]
-
-            # Update true tree data with nearest tree information
-            gdf_true.loc[idx, 'nearest_tree_id'] = nearest_tree['TreeID']
-            gdf_true.loc[idx, 'nearest_tree_height'] = nearest_tree['MaxHeight']
-            gdf_true.loc[idx, 'distance_to_tree'] = nearest_tree['distance']
-
-    # Save the result as a GeoPackage (GPKG) file
-    gdf_true.to_file(output_path, layer='closest_trees', driver='GPKG')
-
-    print(f"Saved closest single trees to {output_path}")
 
 
-if __name__ == '__main__':
+
+def main(dom_dgm_dir: str = '/Users/ygrinblat/Documents/HeiGIT_Projects/green_spaces/Data/nDSM1m/DOM',
+         dop_dir: str = '/Users/ygrinblat/Documents/HeiGIT_Projects/green_spaces/Data/DOP20',
+         chm_dir: str = 'cache/canopy_height'):
+    """
+        Examples to create Canopy Height Model based on LGL BW Geoportal Data
+        1: Create nDSM = DSM - DEM
+            a: Select all high objects, H>2m - all values low are none
+        2. Create NDVI from DOP20
+            a: Make mask for vegetation NDVI>0.3
+        4. Clip mask from nDSM
+        5. apply Watershed model to assess number of trees.
+        6. Results: XY tree, Polygon of a canopy with area, diameter and height of a tree
+        Assumption: Good alignment
+        """
+    # Run the pairing function
+    pairs, unmatched_files = pair_dgm_dom([file.name for file in Path(dom_dgm_dir).glob('*.zip')])
+    # Run unzip for each pair
+    process_ndsm(input_dir=dom_dgm_dir, pairs=pairs)
+    # Process NDVI
+    process_ndvi(input_dir=Path(dop_dir))
+    # Threshold of Crop Height Model and NDVI
+    for dir, res in zip(['cache/ndvi', 'cache/height'], [1.0, None]):
+        imgs = list(Path(dir).glob('*.tif'))
+        for img in tqdm.tqdm(imgs, total=len(imgs)):
+            _ = apply_treshold(image=img,
+                               output_mask_path=f"cache/mask_{dir.split('/')[-1]}",
+                               resolution=res,
+                               threshold=2)
+
+    # Clip height mask by ndvi mask
+    tree_canopy(output_dir=chm_dir,
+                ndvi_dir='cache/mask_ndvi',
+                height_dir='cache/mask_height'
+                )
+    # Apply local peak to detect xy trees and height
+
+    trees_dir = 'cache/trees'
+    chms = list(Path(chm_dir).glob('*.tif'))
     # Example usage
-    import seaborn as sns
-
-    # Load the data
-    trees_comparison = 'cache/trees/closest_single_trees.gpkg'
-    cols = ['id', 'Corylus', 'ageClass', 'height', 'canopyWidt', 'nearest_tree_id', 'nearest_tree_height',
-            'distance_to_tree', 'geometry']
-
-    gdf = gpd.read_file(trees_comparison, columns=cols)
-    gdf = gdf.dropna()
-    gdf['nearest_tree_height'] = gdf['nearest_tree_height'].astype('float')
-    gdf['height'] = gdf['height'].astype('float')
-
-    # Convert to a standard pandas DataFrame for easier plotting
-    df = pd.DataFrame(gdf.drop(columns='geometry'))
-
-    # Calculate the height difference for calibration
-    df['height_diff'] = df['height'] - df['nearest_tree_height']
-    df['height_diff'] = df['height_diff'].dropna()  # Only consider non-null values
-
-    # Create a single figure with multiple subplots
-    plt.figure(figsize=(15, 5))
-
-    # Distribution of Tree Heights
-    plt.subplot(1, 3, 1)
-    sns.histplot(df['height'].dropna(), kde=True, bins=30, color='skyblue')
-    plt.title('Distribution of True Tree Heights')
-    plt.xlabel('Height (m)')
-    plt.ylabel('Frequency')
-
-    # Distribution of Canopy Widths
-    plt.subplot(1, 3, 2)
-    sns.histplot(df['nearest_tree_height'].dropna(), kde=True, bins=30, color='green')
-    plt.title('Distribution of Predicted Tree Heights')
-    plt.xlabel('Height (m)')
-    plt.ylabel('Frequency')
-
-    # Difference Between Actual and Nearest Tree Heights
-    plt.subplot(1, 3, 3)
-    sns.histplot(df['height_diff'], kde=True, bins=30, color='orange')
-    plt.title('Height Difference for Calibration')
-    plt.xlabel('Height Difference (m)')
-    plt.ylabel('Frequency')
-    plt.axvline(0, color='red', linestyle='--')
-
-    plt.tight_layout()
-    plt.savefig('cache/distribution_tree_height.png', format='png')
-    plt.show()
-
-
-
-
-
+    for chm in tqdm.tqdm(chms, total=len(chms)):
+        process_trees(chm_img=str(chm),
+                      output_geojson_path=f'{trees_dir}/{chm.name[:-4]}.geojson',
+                      min_tree_area=4,
+                      min_distance=5
+                      )
