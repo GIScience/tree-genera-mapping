@@ -1,12 +1,12 @@
-fid, genus
-0, Acer
-1, Aesculus
-2, Carpinus
-3, Coniferous
-4, Fagus
-5, Other Deciduous
-6, Platanus
-7, Prunus
-8, Quercus
-9, Tilia
+fid,genus
+0,Acer
+1,Aesculus
+2,Carpinus
+3,Coniferous
+4,Fagus
+5,Other Deciduous
+6,Platanus
+7,Prunus
+8,Quercus
+9,Tilia
 

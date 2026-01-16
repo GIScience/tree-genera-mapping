@@ -11,6 +11,9 @@ Rules:
   - Else if genus in genera_labels.csv -> training_class = fid
   - Else -> training_class = fid("Other Deciduous")
 
+Optional:
+  - Generate square bounding boxes around tree point locations using canopy width.
+
 Outputs:
   GeoPackage with columns: uuid, geometry, genus, training_class
 """
@@ -22,7 +25,12 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+from shapely.geometry import box
 
+
+# -----------------------------
+# Coniferous genus mapping
+# -----------------------------
 CONIFEROUS_MAP = {
     "Abies", "Araucaria", "Calocedrus", "Cedrus", "Chamaecyparis",
     "Cupressus", "Hesperocyparis", "Juniperus", "Larix",
@@ -33,6 +41,7 @@ CONIFEROUS_MAP = {
 
 
 def _norm_genus(x) -> str:
+    """Normalize genus strings for reliable matching."""
     if pd.isna(x):
         return ""
     return str(x).strip()
@@ -44,6 +53,11 @@ def assign_training_classes(
     genus_col: str = "genus",
     id_col: str = "tree_id",
 ) -> gpd.GeoDataFrame:
+    """
+    Assign training_class using genera_labels.csv.
+    Keeps stable IDs if `id_col` exists.
+    Drops rows with missing genus.
+    """
     # Validate inputs
     if genus_col not in gdf_trees.columns:
         raise ValueError(f"Input trees must contain column '{genus_col}'")
@@ -66,6 +80,7 @@ def assign_training_classes(
     dfc["genus"] = dfc["genus"].map(_norm_genus)
     class_map = dict(zip(dfc["genus"], dfc["fid"]))
 
+    # Required group classes
     if "Coniferous" not in class_map:
         raise ValueError("genera_labels.csv must contain a 'Coniferous' class")
     if "Other Deciduous" not in class_map:
@@ -92,18 +107,96 @@ def assign_training_classes(
     return gdf[["uuid", "geometry", "genus", "training_class"]]
 
 
+def add_bbox_from_canopy_width(
+    gdf: gpd.GeoDataFrame,
+    canopy_col: str = "canopyWidt",
+    min_width: float = 0.0,
+) -> gpd.GeoDataFrame:
+    """
+    Create square bounding boxes from a point geometry and canopy width (meters).
+
+    - Assumes geometry is Point
+    - canopy_col values are in meters
+    - bbox is a square with side length = canopy width
+    """
+    if canopy_col not in gdf.columns:
+        raise ValueError(f"Missing canopy width column '{canopy_col}'")
+
+    # Needs projected CRS in meters
+    if gdf.crs is None:
+        raise ValueError("Input GeoDataFrame has no CRS. Cannot build metric bboxes safely.")
+    if getattr(gdf.crs, "is_geographic", False):
+        raise ValueError(
+            f"CRS appears geographic ({gdf.crs}). Reproject to a metric CRS (e.g., EPSG:25832) before bbox creation."
+        )
+
+    widths = pd.to_numeric(gdf[canopy_col], errors="coerce")
+    widths = widths.where(widths >= min_width)
+
+    def _make_bbox(geom, w):
+        if geom is None or geom.geom_type != "Point":
+            return None
+        if pd.isna(w) or w <= 0:
+            return None
+        half = float(w) / 2.0
+        return box(geom.x - half, geom.y - half, geom.x + half, geom.y + half)
+
+    out = gdf.copy()
+    out["bbox"] = [_make_bbox(geom, w) for geom, w in zip(out.geometry, widths)]
+
+    # Drop rows where bbox couldn't be created
+    before = len(out)
+    out = out[out["bbox"].notna()].copy()
+    print(f"Dropped {before - len(out)} trees with missing/invalid {canopy_col} for bbox.")
+
+    # Replace geometry safely
+    out["geometry"] = out["bbox"]
+    out = out.drop(columns=["bbox"]).set_geometry("geometry")
+
+    return out
+
+
 def generate_training_labels(
     trees_path: str | None,
     labels_path: str = "conf/genera_labels.csv",
     output_path: str = "cache/tree_labels.gpkg",
+    genus_col: str = "genus",
+    id_col: str = "tree_id",
+    make_bbox: bool = False,
+    canopy_col: str = "canopyWidt",
 ) -> gpd.GeoDataFrame:
+    """
+    Generate training labels for tree genera.
+    - trees_path must be provided by the user
+    - output directory is created automatically
+    """
     if trees_path is None:
         raise ValueError("trees_path is required. Please provide the path to the downloaded tree dataset.")
 
     gdf_trees = gpd.read_file(trees_path)
     df_classes = pd.read_csv(labels_path)
 
-    labeled = assign_training_classes(gdf_trees, df_classes)
+    labeled = assign_training_classes(
+        gdf_trees=gdf_trees,
+        df_classes=df_classes,
+        genus_col=genus_col,
+        id_col=id_col,
+    )
+
+    if make_bbox:
+        # need the canopy column present in the source (copy it over)
+        if canopy_col not in gdf_trees.columns:
+            raise ValueError(f"make_bbox=True but '{canopy_col}' not found in input trees.")
+        labeled = labeled.merge(
+            gdf_trees[[id_col, canopy_col]],
+            left_on="uuid" if id_col in gdf_trees.columns else None,
+            right_on=id_col if id_col in gdf_trees.columns else None,
+            how="left",
+        )
+        labeled = add_bbox_from_canopy_width(labeled, canopy_col=canopy_col)
+
+        # keep only expected columns
+        labeled = labeled[["uuid", "geometry", "genus", "training_class"]]
 
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,14 +213,18 @@ if __name__ == "__main__":
     ap.add_argument("--output", default="cache/tree_labels.gpkg", help="Output GPKG path")
     ap.add_argument("--id-col", default="tree_id", help="ID column to preserve if present")
     ap.add_argument("--genus-col", default="genus", help="Genus column name")
+
+    ap.add_argument("--make-bbox", action="store_true", help="Replace point geometry with bbox from canopy width")
+    ap.add_argument("--canopy-col", default="canopyWidt", help="Column containing canopy width in meters")
+
     args = ap.parse_args()
 
-    # Pass custom columns if users need them
-    # (keeps script usable with different inventories)
-    gdf = gpd.read_file(args.trees)
-    dfc = pd.read_csv(args.labels)
-    labeled = assign_training_classes(gdf, dfc, genus_col=args.genus_col, id_col=args.id_col)
-
-    out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    labeled.to_file(out_path, driver="GPKG")
+    generate_training_labels(
+        trees_path=args.trees,
+        labels_path=args.labels,
+        output_path=args.output,
+        genus_col=args.genus_col,
+        id_col=args.id_col,
+        make_bbox=args.make_bbox,
+        canopy_col=args.canopy_col,
+    )
