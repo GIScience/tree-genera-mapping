@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 import sys
 sys.path.append(str(Path(__file__).resolve().parents[2]))
+
 def setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] - %(message)s")
     logger = logging.getLogger(__name__)

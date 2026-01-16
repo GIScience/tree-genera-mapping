@@ -47,6 +47,7 @@ from tree_genera_mapping.acquisition.lgl_downloader import LGLDownloader  # noqa
 
 NOTE = "Use these stats to unnormalize the height channel back to meters."
 
+# -----------------------------
 
 def configure_logging():
     logging.basicConfig(

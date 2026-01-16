@@ -1,10 +1,17 @@
 """
-This script generates a dataset of image sub-tiles (640x640) for OBD (Object Detection) Model
-AND
-IMAGE PATCHES FOR IMAGE CLASSIFICATION
+dataset.py
+
+Utilities to:
+1) Split GeoTIFF tiles into fixed-size sub-tiles (e.g., 640x640)
+2) Generate YOLO-format labels (.txt) from vector geometries (bbox polygons recommended)
+3) Optionally cut a patch from a mosaic of overlapping rasters
+
+Assumptions:
+- Training geometries should be polygons (bbox polygons for YOLO are ideal).
+- CRS should be projected (meters) for consistent geometry operations.
 """
-import os
 from pathlib import Path
+from typing import List, Optional
 import rasterio
 from rasterio.windows import Window
 from rasterio.windows import Window
@@ -13,55 +20,55 @@ from shapely.geometry.base import BaseGeometry
 import geopandas as gpd
 from rasterio.merge import merge as merge_tiles
 import logging
-import shutil
-from tqdm import tqdm
-import numpy as np
-import warnings
 
-# Suppress Albumentations update check
-# os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'
-
-# Suppress future warnings from pyogrio
-warnings.filterwarnings("ignore", category=FutureWarning, module="pyogrio")
+# -----------------------------
 # LOGGING
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-)
+# -----------------------------
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',)
 logger = logging.getLogger(__name__)
-
-
+# -----------------------------
 class ImageDataSet:
-    def __init__(self, img_dir: str, output_dir: str,
-                 mode: str, label_col: str = None,
-                 size: int = 640, overlap: float = 0.0,
-                 train: bool = True
+    def __init__(self,
+                 img_dir: str,
+                 output_dir: str,
+                 mode: str,
+                 label_col: Optional[str] = None,
+                 size: int = 640,
+                 overlap: float = 0.0,
+                 train: bool = True,
                  ):
         self.img_dir = Path(img_dir)
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         self.label_col = label_col
         self.mode = mode
         self.overlap = overlap
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.size = size
         self.train = train
         self.class_map = {}
         self.class_dirs = {}
 
-    def get_class_dir(self, class_name: str):
-        if class_name not in self.class_dirs:
-            class_dir = self.output_dir / 'train' / class_name
-            class_dir.mkdir(parents=True, exist_ok=True)
-            self.class_dirs[class_name] = class_dir
-        return self.class_dirs[class_name]
-
     def __len__(self):
+        # counts all matching tif files under img_dir
         tif_files = list(self.img_dir.glob(f'**/{self.mode}_*.tif'))
         return len(tif_files)
-
-    def split_tiff_to_tiles(self, image_path, trees_gdf, ensure_full_coverage=True):
+    # def get_class_dir(self, class_name: str):
+    #     if class_name not in self.class_dirs:
+    #         class_dir = self.output_dir / 'train' / class_name
+    #         class_dir.mkdir(parents=True, exist_ok=True)
+    #         self.class_dirs[class_name] = class_dir
+    #     return self.class_dirs[class_name]
+    def split_tiff_to_tiles(self,
+                            image_path:str | Path,
+                            trees_gdf:gpd.GeoDataFrame,
+                            ensure_full_coverage:bool = True):
+        """
+        Split one GeoTIFF into sub-tiles and (optionally) write YOLO label files.
+        """
+        image_path = Path(image_path)
         stride = int(self.size * (1 - self.overlap))
-        image_name = Path(image_path).stem
+        image_name = image_path.stem
 
         if self.train:
             out_img_dir = self.output_dir / 'images' / 'train'
@@ -69,6 +76,7 @@ class ImageDataSet:
             out_lbl_dir.mkdir(parents=True, exist_ok=True)
         else:
             out_img_dir = self.output_dir / 'images' / 'test'
+
         out_img_dir.mkdir(parents=True, exist_ok=True)
 
         with rasterio.open(image_path) as src:
@@ -116,7 +124,7 @@ class ImageDataSet:
                         dst.write(tile_data)
 
                     # --- Save labels ---
-                    if self.train:
+                    if self.train and out_lbl_dir is not None:
                         label_filename = out_lbl_dir / f"{image_name}_{tile_id}.txt"
                         labels = self.extract_labels(trees_gdf, tile_geom, tile_transform)
                         with open(label_filename, 'w') as f:
@@ -126,9 +134,25 @@ class ImageDataSet:
                     # ---Next tile----
                     tile_id += 1
 
-    def extract_labels(self, trees_gdf, tile_geom, transform):
-        intersecting = trees_gdf[trees_gdf.geometry.within(tile_geom.geometry.iloc[0])]
-        labels = []
+    def extract_labels(self,
+                       trees_gdf:gpd.GeoDataFrame,
+                       tile_geom,
+                       transform):
+        """
+        Convert intersecting geometries to YOLO labels: class x_center y_center width height
+        Assumes geometries are polygons/bboxes in same CRS as raster.
+        """
+        if trees_gdf.crs is None:
+            raise ValueError("trees_gdf has no CRS")
+        if trees_gdf.crs != tile_geom.crs:
+            trees_gdf = trees_gdf.to_crs(tile_geom.crs)
+
+        # IMPORTANT: use intersects, not within (keeps edge objects)
+        tile_poly = tile_geom.geometry.iloc[0]
+        intersecting = trees_gdf[trees_gdf.intersects(tile_poly)]
+        # intersecting = trees_gdf[trees_gdf.geometry.within(tile_poly)] # less ideal
+
+        labels: List[str] = []
         for _, row in intersecting.iterrows():
             geom = row.geometry
             if not isinstance(geom, BaseGeometry):
@@ -153,14 +177,23 @@ class ImageDataSet:
                         label = int(row[self.label_col])
                     except Exception as e:
                         logger.warning(f"Invalid label from column '{self.label_col}': {e}")
+
                 labels.append(f"{label} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
 
         return labels
 
-    def cut_bbox_from_merged_tiles(self, image_paths, geom, output_id, class_name="unknown"):
+    def cut_bbox_from_merged_tiles(self,
+                                   image_paths: List[str | Path],
+                                   geom,
+                                   output_id:str,
+                                   class_name="unknown"):
+        """
+        Cut a patch around geom.bounds from a mosaic of rasters and save it into train/<class_name>/.
+        """
         class_dir = self.output_dir / 'train' / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
 
+        srcs = []
         try:
             srcs = [rasterio.open(p) for p in image_paths]
             mosaic, out_transform = merge_tiles(srcs)

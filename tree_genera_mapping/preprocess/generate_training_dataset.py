@@ -1,28 +1,46 @@
-import os
+"""
+generate_training_dataset.py
+
+Generate training data for:
+1) Tree detection dataset (tiles + labels) from weak tree bboxes
+2) Classification patches (e.g., 128x128) from genus labels
+
+This script is intentionally path-agnostic:
+- users must provide input paths via CLI
+- outputs go to user-defined output directories
+"""
+from __future__ import annotations
+
+import logging
 from pathlib import Path
+from tqdm import tqdm
+
+import geopandas as gpd
 import rasterio
 from rasterio.windows import Window
-from rasterio.windows import Window
-from shapely.geometry import box
-from shapely.geometry.base import BaseGeometry
-import geopandas as gpd
-from rasterio.merge import merge as merge_tiles
-import logging
-import shutil
-from tqdm import tqdm
-import numpy as np
-import warnings
 
 from tree_genera_mapping.preprocess.dataset import ImageDataSet
 from tree_genera_mapping.preprocess.prepare_genus_labels import generate_training_labels
 
+from shapely.geometry import box
+from shapely.geometry.base import BaseGeometry
+from rasterio.merge import merge as merge_tiles
+import shutil
+import numpy as np
+import warnings
+# -----------------------------
 # LOGGING
+# -----------------------------
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
-#####################################
+
+# -----------------------------
+# 1) Detection dataset
+# -------------------------
 def process_ds_obd(raw_img_path:str,
                    output_base_dir:str):
     # Example usage of generating training dataset
@@ -67,10 +85,11 @@ def process_ds_obd(raw_img_path:str,
                 continue
             dataset.split_tiff_to_tiles(tile_path, gdf_tree)
 
-
-def process_tree_patches(raw_img_path:str, output_base_dir: str):
+# -------------------------
+# 2) Classification patches
+# -------------------------
+def make_classification_patches(raw_img_path:str, output_base_dir: str):
     if not Path('data/tree_labels.gpkg').exists():
-
         gdf_tree = generate_training_labels()
     else:
         gdf_tree = gpd.read_file('data/tree_labels.gpkg')
@@ -142,3 +161,62 @@ def process_tree_patches(raw_img_path:str, output_base_dir: str):
 
         except Exception as e:
             logger.warning(f"Failed to create patch for tree {output_id}: {e}")
+# -------------------------
+# CLI
+# -------------------------
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Generate training datasets (detection tiles/labels + classification patches)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    ap_det = sub.add_parser("det", help="Generate YOLO detection dataset from weak bboxes")
+    ap_det.add_argument("--tiles-gpkg", required=True)
+    ap_det.add_argument("--weak-bboxes-gpkg", required=True)
+    ap_det.add_argument("--images-dir", required=True, help="Directory that contains merged/ with tiles")
+    ap_det.add_argument("--output-dir", required=True)
+    ap_det.add_argument("--mode", required=True, help="Prefix in filenames, e.g. rgbih")
+    ap_det.add_argument("--tile-id-col", default="tile_id")
+    ap_det.add_argument("--size", type=int, default=640)
+    ap_det.add_argument("--overlap", type=float, default=0.0)
+
+    ap_cls = sub.add_parser("patches", help="Generate classification patches from genus labels")
+    ap_cls.add_argument("--tiles-gpkg", required=True)
+    ap_cls.add_argument("--genus-labels-gpkg", required=True)
+    ap_cls.add_argument("--images-dir", required=True, help="Directory that contains merged/ with tiles")
+    ap_cls.add_argument("--output-dir", required=True)
+    ap_cls.add_argument("--mode", required=True, help="Prefix in filenames, e.g. rgbih")
+    ap_cls.add_argument("--patch-size", type=int, default=128)
+    ap_cls.add_argument("--tile-id-col", default="dop_kachel")
+    ap_cls.add_argument("--class-col", default="training_class")
+    ap_cls.add_argument("--id-col", default="uuid")
+
+    args = ap.parse_args()
+
+    if args.cmd == "det":
+        make_detection_dataset(
+            tiles_gpkg=args.tiles_gpkg,
+            weak_bboxes_gpkg=args.weak_bboxes_gpkg,
+            images_dir=args.images_dir,
+            output_dir=args.output_dir,
+            mode=args.mode,
+            tile_id_col=args.tile_id_col,
+            size=args.size,
+            overlap=args.overlap,
+        )
+    elif args.cmd == "patches":
+        make_classification_patches(
+            tiles_gpkg=args.tiles_gpkg,
+            genus_labels_gpkg=args.genus_labels_gpkg,
+            images_dir=args.images_dir,
+            output_dir=args.output_dir,
+            mode=args.mode,
+            patch_size=args.patch_size,
+            tile_id_col=args.tile_id_col,
+            class_col=args.class_col,
+            id_col=args.id_col,
+        )
+
+
+if __name__ == "__main__":
+    main()
