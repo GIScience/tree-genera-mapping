@@ -14,7 +14,7 @@ import numpy as np
 import warnings
 
 from tree_genera_mapping.preprocess.dataset import ImageDataSet
-from tree_genera_mapping.preprocess.generate_training_labels import generate_training_labels
+from tree_genera_mapping.preprocess.reassign_labels import generate_training_labels
 
 # LOGGING
 logging.basicConfig(

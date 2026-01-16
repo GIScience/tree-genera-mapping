@@ -1,0 +1,20 @@
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+path: cache
+train: images/train
+val: images/val 
+
+# Number of multispectral image channels
+channels: 5
+# Classes
+nc: 10
+names:
+    0: Acer
+    1: Aesculus
+    2: Carpinus
+    3: Coniferous
+    4: Fagus
+    5: Other Deciduous
+    6: Platanus
+    7: Prunus
+    8: Quercus
+    9: Tilia
