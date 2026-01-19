@@ -25,6 +25,17 @@ python jobs/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/til
 ### Teacher Ensemble Steps:
 1. Generate weak tree labels from NDVI + height thresholds:
 ```bash
+python segment_trees.py \
+  --img-dir /path/to/output/merged \
+  --output-dir /path/to/seg_out \
+  --mode rgbih \
+  --write-bbox \
+  --write-masks \
+  --mask-encoding 0255 \
+  --ndvi-thr 0.25 \
+  --height-thr 2.0 \
+  --min-distance-px 3
+  
 python preprocess/tree_delineation.py --tiles-dir cache/tiles_5ch --output-gpkg cache/weak_tree_bboxes.gpkg
 ```
 
@@ -37,12 +48,15 @@ python preprocess/prepare_genus_labels.py --trees /path/to/GreeHill_dataset.gpkg
 
 3. Generate Initial Training Datasets for Teacher Ensemble Models:
 
-- detection (YOLO images + txt labels)
+3.1. detection (YOLO images + txt labels)
+- **NOTE: HUMAN-IN-THE-LOOP CURATION** of tree labels before running generation of training labels. QGIS can be used to visualize and edit the generated weak tree bounding boxes.  
 ```bash
  python preprocess/make_training_data.py det --tiles-gpkg data/tiles.gpkg --weak-bboxes-gpkg cache/weak_tree_bboxes.gpkg --images-dir cache/tiles_5ch --mode rgbih --output-dir cache/datasets/yolo_tree_det
 ```
 
-- genus patches (classification dataset)
+3.2. Genus patches (classification dataset)
+- this is an image with 5-channels (RGB + IR + Height) and corresponding genus labels for each tree/patch.
+- Size is uniform for all patches (e.g., 128x128px) 
 ```bash
 
 python preprocess/make_training_data.py patches --tiles-gpkg data/tiles.gpkg --genus-labels-gpkg cache/tree_labels_bbox.gpkg --images-dir cache/tiles_5ch --mode rgbih --output-dir cache/datasets/genera_patches --patch-size 128
