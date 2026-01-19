@@ -47,7 +47,7 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tree_genera_mapping.acquisition.lgl_downloader import LGLDownloader
+from tree_genera_mapping.acquisition.lgl_store import LGLDownloader
 from tree_genera_mapping.preprocess.preprocess_tile import TileDataset
 
 NOTE = "Use these stats to unnormalize the height channel back to meters."
@@ -89,12 +89,15 @@ def load_tile_ids_from_gpkg(tiles_gpkg: Path) -> List[str]:
 
 
 # ------------------------- download/unzip -------------------------
-
-def download_tile_to_temp(tile_id: str, tmp_root: Path, products=("dop20rgbi", "dom1", "dgm1")) -> Tuple[Optional[Path], Optional[Path], Optional[Path], Path]:
+def download_tile_to_temp(
+    tile_id: str,
+    tmp_root: Path,
+    products: Tuple[str, ...],
+) -> Tuple[Optional[Path], Optional[Path], Optional[Path], Optional[Path], Path]:
     """
     Download products for a tile into tmp_root/<tile_id>/ and unzip.
 
-    Returns: dop_path (.tif), dom_path (.tif), dgm_path (.xyz), tmp_tile_dir
+    Returns: dop_path (.tif), ndom_path(.tif) , dom_path (.tif), dgm_path (.xyz), tmp_tile_dir
     """
     prefix, x, y = tile_id.split("_")
     tmp_tile_dir = tmp_root / tile_id
@@ -136,6 +139,10 @@ def download_tile_to_temp(tile_id: str, tmp_root: Path, products=("dop20rgbi", "
         unzipped_dir / "dop20rgbi",
         [f"dop20rgbi_{stub}.tif", "dop20rgbi_*.tif", "*.tif"],
     )
+    ndom_path = _find_single_file(
+        unzipped_dir / "ndom1",
+        [f"ndom1_{stub}.tif", "ndom1_*.tif", "*.tif"],
+    )
     dom_path = _find_single_file(
         unzipped_dir / "dom1",
         [f"dom1_{stub}.tif", "dom1_*.tif", "*.tif"],
@@ -145,11 +152,10 @@ def download_tile_to_temp(tile_id: str, tmp_root: Path, products=("dop20rgbi", "
         [f"dgm1_{stub}.xyz", "dgm1_*.xyz", "*.xyz"],
     )
 
-    return dop_path, dom_path, dgm_path, tmp_tile_dir
+    return dop_path, ndom_path, dom_path, dgm_path, tmp_tile_dir
 
 
 # ------------------------- height stats -------------------------
-
 def height_min_max_from_dom_dgm(dom_path: Path, dgm_xyz_path: Path) -> Tuple[float, float]:
     """
     Compute min/max of height (meters) = DOM - DGM.
@@ -188,14 +194,16 @@ def height_min_max_from_dom_dgm(dom_path: Path, dgm_xyz_path: Path) -> Tuple[flo
 
 
 # ------------------------- main per-tile -------------------------
-
 def build_rgbih_and_json_for_tile(
     tile_id: str,
     tmp_root: Path,
     output_tiles: Path,
+    mode: str,
+    products: Tuple[str, ...],
     keep_tmp: bool = False,
     overwrite: bool = False,
 ):
+
     merged_dir = output_tiles / "merged"
     merged_dir.mkdir(parents=True, exist_ok=True)
 
@@ -206,7 +214,30 @@ def build_rgbih_and_json_for_tile(
         logging.info("✅ Exists (tif+json), skipping: %s", tile_id)
         return
 
-    dop_path, dom_path, dgm_path, tmp_tile_dir = download_tile_to_temp(tile_id, tmp_root)
+    dop_path, ndom_path, dom_path, dgm_path, tmp_tile_dir = download_tile_to_temp(
+        tile_id=tile_id,
+        tmp_root=tmp_root,
+        products=products,
+    )
+    mode = mode.upper()
+
+    if mode == "RGB":
+        ndom_path = None
+        dom_path = None
+        dgm_path = None
+
+    elif mode == "RGBI":
+        ndom_path = None
+        dom_path = None
+        dgm_path = None
+
+    elif mode == "RGBIH":
+        # same logic we already discussed:
+        # if ndom_path is None → build from dom1-dgm1
+        ...
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
+
     if dop_path is None or dom_path is None or dgm_path is None:
         logging.error("❌ Missing dop/dom/dgm for tile %s. dop=%s dom=%s dgm=%s", tile_id, dop_path, dom_path, dgm_path)
         if not keep_tmp and tmp_tile_dir.exists():
@@ -217,7 +248,7 @@ def build_rgbih_and_json_for_tile(
     tile = TileDataset(
         tile_id=tile_id,
         dop_path=str(dop_path),
-        ndsm_path=None,
+        ndom_path=str(ndom_path),
         dgm_path=str(dgm_path),
         dom_path=str(dom_path),
         output_dir=str(output_tiles),
@@ -245,7 +276,20 @@ def build_rgbih_and_json_for_tile(
     if not keep_tmp and tmp_tile_dir.exists():
         shutil.rmtree(tmp_tile_dir, ignore_errors=True)
 
+def products_for_mode(mode: str) -> Tuple[str, ...]:
+    mode = mode.upper()
 
+    if mode == "RGB":
+        return ("dop20rgb",)
+
+    if mode == "RGBI":
+        return ("dop20rgbi",)
+
+    if mode == "RGBIH":
+        # ndom1 is optional at runtime; dom1+dgm1 are needed for fallback + stats
+        return ("dop20rgbi", "ndom1", "dom1", "dgm1")
+
+    raise ValueError(f"Unsupported mode: {mode}")
 # ------------------------- CLI -------------------------
 
 def parse_args():
@@ -254,6 +298,7 @@ def parse_args():
     p.add_argument("--tiles-gpkg", required=True, help="GeoPackage containing 'dop_kachel'")
     p.add_argument("--tmp-root", required=True, help="Temp folder for downloads/unzips")
     p.add_argument("--output-tiles", required=True, help="Output folder; writes to OUTPUT/merged/")
+    p.add_argument("--mode", default="RGBIH", help="TileDataset mode - RGB, RGBI, RGBIH")
     p.add_argument("--keep-tmp", action="store_true", help="Keep per-tile temp directories")
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
 
@@ -270,6 +315,10 @@ def parse_args():
 def main():
     configure_logging()
     args = parse_args()
+
+    mode = args.mode.upper()
+    products = products_for_mode(mode)
+    logging.info("Mode=%s → downloading products: %s", mode, products)
 
     tiles_gpkg = Path(args.tiles_gpkg)
     tmp_root = Path(args.tmp_root)
@@ -293,6 +342,8 @@ def main():
                 output_tiles=output_tiles,
                 keep_tmp=args.keep_tmp,
                 overwrite=args.overwrite,
+                mode=mode,
+                products=products,
             )
         except Exception as e:
             logging.exception("❌ Failed tile %s: %s", tile_id, e)

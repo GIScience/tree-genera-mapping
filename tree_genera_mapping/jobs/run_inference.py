@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+"""
+Run inference on LGL tiles using a YOLO model trained on RGBIH data.
+
+"""
 import argparse
 import logging
 from pathlib import Path
@@ -95,10 +100,13 @@ def run_inference_on_tile(model, tile_path, out_dir, patch_size=640, stride=512,
                 geom = box(x1_map, y2_map, x2_map, y1_map)
                 # === Extra info ===
                 # height: max of 5th band inside bbox
+                #TODO if there is no height json file, set to normalised values between 0-255
                 height_patch = img[4, y1i:y2i, x1i:x2i]
                 max_height = float(height_patch.max()) if height_patch.size > 0 else np.nan
                 min_height = float(height_patch.min()) if height_patch.size > 0 else np.nan
+
                 json_path = Path(tile_path).with_suffix('.height.json')
+
                 if json_path.exists():
                     with open(json_path) as f:
                         height_meta = json.load(f)
@@ -144,7 +152,12 @@ def run_inference_on_tile(model, tile_path, out_dir, patch_size=640, stride=512,
 def run(ckpt_path: str,
         tile_id:str,
         tile_dir:str,
-        output_dir:str):
+        output_dir:str,
+        conf:float = 0.25,
+        iou:float = 0.4,
+        patch_size:int = 640,
+        stride:int = 512,
+        ):
     # ------ CONFIG
     config = {
         'ckpt_path': ckpt_path,
@@ -153,33 +166,55 @@ def run(ckpt_path: str,
     # Load model
     model = YOLO(config['ckpt_path'])
     model.model.ch = 5  # set number of channels to 5 (RGBIH)
+
     # Run inference on the specified tile
     if tile_id is None:
         img_files = list(Path(config['imgs_path']).glob("*.tif"))
         for img_file in tqdm(img_files, total=len(img_files), desc="Processing tiles"):
             run_inference_on_tile(model=model,
-                              tile_path=img_file,#f"cache/merged/rgbih_32_{tile_id}.tif",
-                              out_dir=output_dir,
-                                patch_size=640, stride=512, conf=0.25, iou=0.4
+                                  tile_path=img_file,
+                                  out_dir=output_dir,
+                                  patch_size=640,
+                                  stride=512,
+                                  conf=0.25,
+                                  iou=0.4
                               )
     else:
-        logger.info(f"🔍 Running inference on tile: {tile_id}")
-        tile_id = tile_id.replace("-", "_")
-        run_inference_on_tile(model=model,
-                              tile_path=f"cache/merged/rgbih_32_{tile_id}.tif",
-                              out_dir=output_dir,
-                              patch_size=640, stride=640, conf=0.2, iou=0.4
-                              )
+        img_file = Path(config['imgs_path']) / f"rgbih_{tile_id}.tif"
+        if img_file.exists():
+            run_inference_on_tile(model=model,
+                                    tile_path=img_file,
+                                    out_dir=output_dir,
+                                    patch_size=640,
+                                    stride=512,
+                                    conf=0.25,
+                                    iou=0.4
+                                )
+
+
+
 
 
     return None
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Download and preprocess a single LGL tile into RGBIH GeoTIFF")
-    parser.add_argument("--tile_id", default='457-5428', type=str, required=False, help="Tile ID (format: xxx_yyyy, e.g. 457-5428)")
-    parser.add_argument("--output_dir",default='cache/predictions', type=Path, required=False, help="Folder to save final RGBIH tile")
+    parser.add_argument("--tile_id", default='457-5428', type=str, required=False,
+                        help="Tile ID (format: xxx_yyyy, e.g. 457-5428)")
+    parser.add_argument("--output_dir", default='cache/predictions', type=Path, required=False,
+                        help="Folder to save final RGBIH tile")
     parser.add_argument("--tile_dir", default='cache/merged', type=str, required=False, help="Tile Directory")
+    parser.add_argument("--ckpt_path", default='models/yolov8_rgbih_best.pt', type=str, required=False,)
+    parser.add_argument("--patch_size", default=640, type=int, required=False, help="Patch size for inference")
+    parser.add_argument("--stride", default=512, type=int, required=False, help="Stride for inference")
+    parser.add_argument("--conf", default=0.25, type=float, required=False, help="Confidence threshold for inference")
+    parser.add_argument("--iou", default=0.4, type=float, required=False, help="IOU threshold for inference")
+
 
     args = parser.parse_args()
 
-    run(args.tile_id, args.tile_dir, args.output_dir)
+    run(args.tile_id, args.tile_dir, args.output_dir, args.ckpt_path, args.conf, args.iou, args.patch_size, args.stride)
+
+
+if __name__ == "__main__":
+   main()

@@ -2,13 +2,11 @@ import os
 import time
 import logging
 import geopandas as gpd
-import pandas as pd
 from typing import List
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 
-DATA_TYPE = ["dop20rgb", "dop20rgbi", "dom1", "dgm1", "ndom1"]
 
 class LGLDownloader:
     def __init__(self, base_folder="cache/lgl_store", delay_seconds=10, parallel=False, max_workers=4):
@@ -133,10 +131,12 @@ class LGLDownloader:
             logging.info("⏳ Waiting %d seconds before next tile...\n", self.delay_seconds)
             time.sleep(self.delay_seconds)
 
-
+# ---------------------------------
+# Manual run function by INDEX for testing
+# ---------------------------------
 def run_lgl_downloader(file_path:str ,
                        output_dir:str ="cache/lgl_store",
-                       selected_products: List[str] = DATA_TYPE,
+                       selected_products: List[str] = ["dop20rgbi", "ndom1"],
                        parallel:bool = False,
                        delay_seconds:int = 2,
                        max_workers:int = 4,
@@ -187,7 +187,12 @@ def run_lgl_downloader(file_path:str ,
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tiles-gpkg", required=True)
+    ap.add_argument("--tiles-gpkg", required=True, help="GPKG file of LGL Tiles - data/tiles.gpkg with a 'dop_kachel' column")
+    ap.add_argument(
+        "--selected-products",
+        default=["dop20rgbi", "ndom1"],
+        help="Comma-separated list of products to download: dop20rgb,dop20rgbi,dom1,dgm1,ndom1"
+    )
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--parallel", action="store_true")
     ap.add_argument("--delay-seconds", type=int, default=1)
@@ -196,10 +201,12 @@ if __name__ == "__main__":
     ap.add_argument("--index-end", type=int, default=None)
     args = ap.parse_args()
 
+    sel_products = [p.strip() for p in args.selected_products.split(",") if p.strip()]
+
     run_lgl_downloader(
         file_path=args.tiles_gpkg,
         output_dir=args.output_dir,
-        selected_products=["dop20rgbi","ndom1"],
+        selected_products=sel_products,
         parallel=args.parallel,
         delay_seconds=args.delay_seconds,
         max_workers=args.max_workers,

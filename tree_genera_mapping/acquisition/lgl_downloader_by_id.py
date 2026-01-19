@@ -8,13 +8,14 @@ import argparse
 import re
 from typing import Iterable, List, Optional
 
-# DATA_TYPE = ["dop20rgb", "dop20rgbi", "dom1", "dgm1", "ndom1"]
-
 _TILE_RE = re.compile(r"^\d{3}-\d{4}$")  # e.g., 457-5428
 
-
 class LGLDownloader:
-    def __init__(self, base_folder="cache/lgl_store", delay_seconds=10, parallel=False, max_workers=4):
+    def __init__(self,
+                 base_folder="cache/lgl_store",
+                 delay_seconds=10,
+                 parallel=False,
+                 max_workers=4):
         self.base_folder = base_folder
         self.delay_seconds = delay_seconds
         self.parallel = parallel

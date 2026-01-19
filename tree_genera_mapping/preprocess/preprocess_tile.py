@@ -96,7 +96,7 @@ class TileDataset:
                  output_dir,
                  mode='RGBIH',
                  dop_path=None,
-                 ndsm_path=None,
+                 ndom_path=None,
                  dgm_path=None,
                  dom_path=None,
                  temp_dir=None,
@@ -105,7 +105,7 @@ class TileDataset:
         self.mode = mode.upper()
 
         self.dop_path = Path(dop_path) if dop_path else None
-        self.ndsm_path = Path(ndsm_path) if ndsm_path else None
+        self.ndom_path = Path(ndom_path) if ndom_path else None
         self.dgm_path = Path(dgm_path) if dgm_path else None
         self.dom_path = Path(dom_path) if dom_path else None
 
@@ -190,8 +190,8 @@ class TileDataset:
         transform: rasterio.Affine of the RGB tile
         """
         # Prefer precomputed nDSM/CHM if it exists
-        if self.ndsm_path and self.ndsm_path.exists():
-            return self._load_height(self.ndsm_path, shape, transform)
+        if self.ndom_path and self.ndom_path.exists():
+            return self._load_height(self.ndom_path, shape, transform)
 
         # Otherwise, build CHM from DGM + DOM on the fly
         if self.dgm_path and self.dom_path and self.dgm_path.exists() and self.dom_path.exists():
@@ -316,7 +316,7 @@ def process_tile_row(row, output_dir, mode='RGBIH'):
     tile = TileDataset(
         tile_id=row['tile_id'],
         dop_path=row['dop20_path'],
-        ndsm_path=row.get('ndsm1_path'),
+        ndom_path=row.get('ndsm1_path'),
         dgm_path=row.get('dgm1_path'),
         dom_path=row.get('dom1_path'),
         output_dir=output_dir,
@@ -325,30 +325,4 @@ def process_tile_row(row, output_dir, mode='RGBIH'):
     return tile.process()
 
 
-if __name__ == '__main__':
-    # Example of usage
-    orto20_fol = '/mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/OpenGeoData/dop20rgbi'
-    dgm_fol = '/mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/OpenGeoData/dgm1'
-    dom_fol = '/mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/OpenGeoData/dom1'
-    ndsm_fol = '/mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/OpenGeoData/height'
-    output_base_dir = '/mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/tiles_rgbih'
-    mode = 'RGBIH'
-
-    # Match tile id with imgs
-    gdf = generate_ds_tiles(input_path='/mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/OpenGeoData/urban_tiles.gpkg',
-                            dop_folder=orto20_fol,
-                            dgm_folder=dgm_fol,
-                            dom_folder=dom_fol,
-                            ndsm_folder=ndsm_fol
-                            )
-
-    # Process tiles
-    for idx, row in tqdm(gdf.iterrows(), total=len(gdf), desc="Processing tiles"):
-        if idx != 2087:
-            continue
-        try:
-            process_tile_row(row, output_dir=output_base_dir, mode=mode)
-        except Exception as e:
-            logger.error(f"Failed to process tile {row['tile_id']}: {e}")
-
-
+# if __name__ == '__main__':
