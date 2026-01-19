@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 logging.info(PROJECT_ROOT)
 
-from tree_genera_mapping.preprocess.dataset_chm import HeightModel
+from tree_genera_mapping.preprocess.height_dataset import HeightModel
 from tree_genera_mapping.preprocess.utils import img_resample, normalize_hm_to_255
 from multiprocessing import Pool, cpu_count
 
