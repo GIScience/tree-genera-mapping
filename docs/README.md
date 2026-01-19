@@ -23,20 +23,15 @@ python jobs/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/til
   - visual validation  and manual correction of predictions in QGIS.
 - Treat the curated outputs as hard labels to form the final training dataset.
 ### Teacher Ensemble Steps:
-1. Generate weak tree labels from NDVI + height thresholds:
+1. Detect and Generate tree canopy polygons based on the watershed segmentation of NDVI and Height Model.
 ```bash
-python segment_trees.py \
-  --img-dir /path/to/output/merged \
-  --output-dir /path/to/seg_out \
+python preprocess/segment_trees.py \
+  --img-dir merged \
+  --output-dir outputs \
   --mode rgbih \
-  --write-bbox \
-  --write-masks \
-  --mask-encoding 0255 \
-  --ndvi-thr 0.25 \
+  --ndvi-thr 0.2 \
   --height-thr 2.0 \
-  --min-distance-px 3
-  
-python preprocess/tree_delineation.py --tiles-dir cache/tiles_5ch --output-gpkg cache/weak_tree_bboxes.gpkg
+  --write-bbox 
 ```
 
 2. GreeHill Tree Genera Labels Preparation: 
