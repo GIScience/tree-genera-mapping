@@ -1,15 +1,24 @@
 """
 tree_delineation.py
 
+Library-only functions for watershed-based tree delineation.
+
+Supported inputs
+- Single-band height raster (meters) + canopy mask
+- Multi-band workflows where you provide:
+    - height_m (meters)
+    - optional ndvi (float)
+    - canopy mask (bool)
+
+This module:
 - builds masks
 - detects peaks
 - runs watershed
-- returns polygons as a GeoDataFrame
+- returns GeoDataFrame polygons
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -17,7 +26,6 @@ import geopandas as gpd
 import numpy as np
 import rasterio
 from rasterio.features import shapes
-from rasterio.transform import rowcol
 from scipy.ndimage import binary_fill_holes, distance_transform_edt, gaussian_filter, median_filter
 from shapely.geometry import shape as shp_shape
 from skimage.feature import peak_local_max
@@ -26,10 +34,6 @@ from skimage.measure import label
 from skimage.morphology import remove_small_objects
 from skimage.segmentation import watershed
 
-logger = logging.getLogger(__name__)
-
-
-# ------------------------- config dataclasses -------------------------
 
 @dataclass(frozen=True)
 class MaskParams:
@@ -57,8 +61,6 @@ class SegmentParams:
     fill_holes: bool = True
 
 
-# ------------------------- basic utilities -------------------------
-
 def compute_ndvi(nir: np.ndarray, red: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """NDVI = (NIR - Red) / (NIR + Red)."""
     return (nir - red) / (nir + red + eps)
@@ -73,12 +75,8 @@ def smooth_surface(height_m: np.ndarray, smooth: SmoothParams) -> np.ndarray:
     return gaussian_filter(height_m, sigma=float(smooth.gaussian_sigma))
 
 
-# ------------------------- mask building -------------------------
-
 def clean_binary_mask(mask: np.ndarray, min_area_px: int) -> np.ndarray:
-    """
-    Remove small connected components from a boolean mask.
-    """
+    """Remove small connected components from a boolean mask."""
     mask = mask.astype(bool)
     labeled = label(mask)
     if min_area_px and min_area_px > 1:
@@ -86,13 +84,13 @@ def clean_binary_mask(mask: np.ndarray, min_area_px: int) -> np.ndarray:
     return labeled > 0
 
 
-def canopy_mask_from_chm(chm_m: np.ndarray, mask_params: MaskParams) -> np.ndarray:
+def canopy_mask_from_height(height_m: np.ndarray, mask_params: MaskParams) -> np.ndarray:
     """
-    Canopy mask for single-band CHM (meters):
-      mask = chm >= height_thr_m  (or chm>0 if height_thr_m <= 0)
+    Canopy mask from a single-band height raster in meters.
+    mask = height >= height_thr_m (or height > 0 if height_thr_m <= 0)
     """
     thr = float(mask_params.height_thr_m)
-    base = (chm_m > 0) if thr <= 0 else (chm_m >= thr)
+    base = (height_m > 0) if thr <= 0 else (height_m >= thr)
     return clean_binary_mask(base, mask_params.min_canopy_area_px)
 
 
@@ -102,51 +100,14 @@ def masks_from_ndvi_and_height(
     mask_params: MaskParams,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    For multi-band workflows with height already in meters:
-      veg_mask    = ndvi >= ndvi_thr
-      height_mask = height_m >= height_thr_m
-      canopy_mask = veg_mask & height_mask, then cleaned
+    veg_mask    = ndvi >= ndvi_thr
+    height_mask = height_m >= height_thr_m
+    canopy_mask = clean(veg & height)
     """
     veg = ndvi >= float(mask_params.ndvi_thr)
     tall = height_m >= float(mask_params.height_thr_m)
-    canopy = veg & tall
-    canopy = clean_binary_mask(canopy, mask_params.min_canopy_area_px)
+    canopy = clean_binary_mask(veg & tall, mask_params.min_canopy_area_px)
     return veg.astype(bool), tall.astype(bool), canopy.astype(bool)
-
-
-# ------------------------- markers -------------------------
-
-def markers_from_external_peaks(
-    peaks_gdf: gpd.GeoDataFrame,
-    raster_shape: Tuple[int, int],
-    transform: rasterio.Affine,
-    peaks_crs: str,
-    raster_crs: str,
-) -> np.ndarray:
-    """
-    Convert point peaks to a marker array. Reprojects peaks to raster CRS if needed.
-    """
-    markers = np.zeros(raster_shape, dtype=np.int32)
-    if peaks_gdf is None or peaks_gdf.empty:
-        return markers
-
-    gdf = peaks_gdf
-    if gdf.crs is None:
-        gdf = gdf.set_crs(peaks_crs)
-
-    if raster_crs and gdf.crs and gdf.crs.to_string() != raster_crs:
-        gdf = gdf.to_crs(raster_crs)
-
-    idx = 1
-    for geom in gdf.geometry:
-        if geom is None or geom.is_empty:
-            continue
-        r, c = rowcol(transform, geom.x, geom.y)
-        if 0 <= r < raster_shape[0] and 0 <= c < raster_shape[1]:
-            markers[r, c] = idx
-            idx += 1
-
-    return markers
 
 
 def markers_from_height_peaks(
@@ -154,9 +115,6 @@ def markers_from_height_peaks(
     canopy_mask: np.ndarray,
     peak_params: PeakParams,
 ) -> np.ndarray:
-    """
-    Compute markers using local maxima on the height surface within the canopy mask.
-    """
     canopy_mask = canopy_mask.astype(bool)
     h = np.where(canopy_mask, height_m, 0.0)
 
@@ -174,8 +132,6 @@ def markers_from_height_peaks(
     return markers
 
 
-# ------------------------- watershed segmentation -------------------------
-
 def watershed_segment(
     height_m: np.ndarray,
     canopy_mask: np.ndarray,
@@ -183,14 +139,14 @@ def watershed_segment(
     transform: rasterio.Affine,
     crs: str,
     *,
-    smooth: SmoothParams = SmoothParams(),
-    seg: SegmentParams = SegmentParams(),
+    smooth: SmoothParams,
+    seg: SegmentParams,
 ) -> gpd.GeoDataFrame:
     """
-    Watershed segmentation returning polygons as GeoDataFrame with columns:
-      - label (int)
-      - geometry (polygon)
-      - area (in CRS units^2)
+    Watershed segmentation returning polygons as GeoDataFrame with:
+      - label
+      - geometry
+      - area
     """
     canopy_mask = canopy_mask.astype(bool)
 
@@ -220,8 +176,5 @@ def watershed_segment(
         vals.append(int(val))
 
     gdf = gpd.GeoDataFrame({"label": vals, "geometry": polys}, crs=crs)
-    if not gdf.empty:
-        gdf["area"] = gdf.geometry.area
-    else:
-        gdf["area"] = []
+    gdf["area"] = gdf.geometry.area if not gdf.empty else []
     return gdf
