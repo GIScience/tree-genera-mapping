@@ -35,6 +35,18 @@ conda env create -f environment.yaml
 conda activate map-tree-genera
 ```
 
+How to run the pre-trained YOLOv11l model 5CH imagery
+1. Download LGL products to Generate TileDataset for selected tile ids:
+```bash
+python jobs/run_tile_dataset.py  \
+ --tile-id 32_355_6048
+```
+
+2. Run pre-trained YOLOv11l model to detect and classify tree genus:
+```bash
+python jobs/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
+```
+
 ## Model Checkpoints
 | Task                              | Model Name | Modification    | URL Link                                                                             |
 |-----------------------------------|------------|-----------------|--------------------------------------------------------------------------------------|
