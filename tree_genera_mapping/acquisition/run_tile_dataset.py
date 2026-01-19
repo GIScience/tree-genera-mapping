@@ -47,7 +47,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from tree_genera_mapping.acquisition.lgl_store import LGLDownloader
-from tree_genera_mapping.preprocess.preprocess_tile import TileDataset
+from tree_genera_mapping.preprocess.tile_dataset import TileDataset
 
 NOTE = "Use these stats to unnormalize the height channel back to meters."
 
