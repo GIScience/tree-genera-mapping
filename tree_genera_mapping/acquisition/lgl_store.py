@@ -1,15 +1,15 @@
 import os
 import time
 import logging
-import geopandas as gpd
-from typing import List
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import argparse
-
 
 class LGLDownloader:
-    def __init__(self, base_folder="cache/lgl_store", delay_seconds=10, parallel=False, max_workers=4):
+    def __init__(self,
+                 base_folder="cache/lgl_store",
+                 delay_seconds=10,
+                 parallel=False,
+                 max_workers=4):
         self.base_folder = base_folder
         self.delay_seconds = delay_seconds
         self.parallel = parallel
