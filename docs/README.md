@@ -5,7 +5,7 @@ This repository provides a workflow for urban tree detection and genus mapping. 
 
 **Inputs (download separately):**
 
-- GreenHill tree inventory (.gpkg) with columns: tree_id, genus, canopyWidt, geometry (Point), CRS in meters (e.g., EPSG:25832).
+- GreeHill tree inventory (.gpkg) with columns: tree_id, genus, canopyWidt, geometry (Point), CRS in meters (e.g., EPSG:25832).
 - LGL imagery + height (download manually or via script).
 
 **Steps:**
@@ -25,7 +25,7 @@ python preprocess/build_5ch_tiles.py --input-dir cache/lgl_store --tiles-gpkg da
 python preprocess/tree_delineation.py --tiles-dir cache/tiles_5ch --output-gpkg cache/weak_tree_bboxes.gpkg
 ```
 
-4. Prepare genus labels from GreenHill inventory (and optional canopy-width bboxes):
+4. Prepare genus labels from GreeHill inventory (and optional canopy-width bboxes):
 ```bash
 python preprocess/prepare_genus_labels.py --trees /path/to/GreeHill_dataset.gpkg --labels conf/genera_labels.csv --output cache/tree_labels_bbox.gpkg --make-bbox
 ```
