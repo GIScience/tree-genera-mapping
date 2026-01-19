@@ -31,7 +31,7 @@ python preprocess/segment_trees.py \
   --mode rgbih \
   --ndvi-thr 0.2 \
   --height-thr 2.0 \
-  --write-bbox 
+  --make-bbox 
 ```
 
 2. GreeHill Tree Genera Labels Preparation: 

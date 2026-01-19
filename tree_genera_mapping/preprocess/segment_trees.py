@@ -24,7 +24,6 @@ import geopandas as gpd
 import rasterio
 import tqdm
 
-# ✅ import your new library functions
 from tree_genera_mapping.preprocess.tree_delineation import (
     MaskParams,
     PeakParams,
@@ -156,7 +155,7 @@ def run_segmentation_batch(
     peak_params: PeakParams,
     smooth: SmoothParams,
     seg: SegmentParams,
-    write_bbox: bool,
+    make_bbox: bool,
     write_masks: bool,
     mask_encoding: str,
 ) -> None:
@@ -224,7 +223,7 @@ def run_segmentation_batch(
         gdf.to_file(out_poly, driver="GPKG")
         logger.info("Saved %d polygons -> %s", len(gdf), out_poly)
 
-        if write_bbox:
+        if make_bbox:
             gdf_bbox = gdf.copy()
             gdf_bbox["geometry"] = gdf_bbox.geometry.envelope
             out_bbox = output_dir / f"trees_bbox_{tile_id}.gpkg"
@@ -238,7 +237,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--mode", choices=["ndom", "rgbih"], required=True)
 
-    ap.add_argument("--write-bbox", action="store_true")
+    ap.add_argument("--make-bbox", action="store_true")
     ap.add_argument("--write-masks", action="store_true")
     ap.add_argument("--mask-encoding", choices=["01", "0255"], default="01")
 
@@ -301,7 +300,7 @@ def main():
         peak_params=peak_params,
         smooth=smooth,
         seg=seg,
-        write_bbox=args.write_bbox,
+        make_bbox=args.make_bbox,
         write_masks=args.write_masks,
         mask_encoding=args.mask_encoding,
     )
