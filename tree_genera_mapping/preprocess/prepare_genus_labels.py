@@ -25,8 +25,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import box
-
+from tree_genera_mapping.preprocess.utils import _make_bbox
 
 # -----------------------------
 # Coniferous genus mapping
@@ -133,13 +132,6 @@ def add_bbox_from_canopy_width(
     widths = pd.to_numeric(gdf[canopy_col], errors="coerce")
     widths = widths.where(widths >= min_width)
 
-    def _make_bbox(geom, w):
-        if geom is None or geom.geom_type != "Point":
-            return None
-        if pd.isna(w) or w <= 0:
-            return None
-        half = float(w) / 2.0
-        return box(geom.x - half, geom.y - half, geom.x + half, geom.y + half)
 
     out = gdf.copy()
     out["bbox"] = [_make_bbox(geom, w) for geom, w in zip(out.geometry, widths)]
