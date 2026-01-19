@@ -22,8 +22,8 @@ The underlying remote sensing data are provided by the
 https://www.lgl-bw.de/Produkte/Open-Data/
 
 Using this portal, users can download **1 × 1 km tiles** of:
-- very high resolution (VHR) multispectral aerial imagery - **20cm spatial resolution**
-- airborne LiDAR data
+- very high resolution (VHR) **Multispectral** aerial **imagery** - **20cm spatial resolution**
+- **Height Model** derived from an airborne LiDAR - **1m spatial resolution**
 
 These datasets are intended to be aligned with the grid defined in
 `tiles.gpkg`.
