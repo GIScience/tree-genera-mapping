@@ -10,9 +10,29 @@ This repository provides a workflow for urban tree detection and genus mapping. 
 
 **Steps:**
 
-1. Download LGL tiles for selected IDs:
+1. Download LGL tiles for a selected tile id:
 ```bash
-python acquisition/lgl_downloader.py --tiles-gpkg data/tiles.gpkg --output-dir cache/lgl_store --products dop20rgbi ndom1
+python lgl_downloader.py \
+  --tiles-gpkg data/tiles.gpkg \
+  --output-dir cache/lgl_store \
+  --tile-id 457-5428 \
+  --products dop20rgbi,ndom1
+```
+Or download multiple tiles by specifying a comma-separated list of tile ids:
+
+```bash
+python lgl_downloader.py \
+  --tiles-gpkg data/tiles.gpkg \
+  --output-dir cache/lgl_store \
+  --tile-ids 457-5428,458-5428 \
+  --products dop20rgbi,ndom1
+```
+Download all tiles (for example, dop20rgbi products only): 
+```bash 
+python lgl_downloader.py \
+  --tiles-gpkg data/tiles.gpkg \
+  --output-dir cache/lgl_store \
+  --products dop20rgbi
 ```
 
 2. Build 5-channel raster tiles (RGB + NIR + normalized height) into cache/tiles_5ch/:
@@ -25,7 +45,7 @@ python preprocess/build_5ch_tiles.py --input-dir cache/lgl_store --tiles-gpkg da
 python preprocess/tree_delineation.py --tiles-dir cache/tiles_5ch --output-gpkg cache/weak_tree_bboxes.gpkg
 ```
 
-4. Prepare genus labels from GreeHill inventory (and optional canopy-width bboxes):
+4. Prepare genus labels from GreeHill inventory (and optional canopy bounding boxes):
 ```bash
 python preprocess/prepare_genus_labels.py --trees /path/to/GreeHill_dataset.gpkg --labels conf/genera_labels.csv --output cache/tree_labels_bbox.gpkg --make-bbox
 ```
