@@ -1,136 +1,100 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-On-demand RGB/RGBI/RGBIH dataset builder using LGLDownloader + TileDataset.
+Build merged RGBIH tiles AND write per-tile JSON height metadata.
 
-For each selected tile in a GeoPackage:
+For each tile_id (e.g. "32_355_6048") selected from a GeoPackage:
 
-  - Check if final merged tile exists: output_tiles/merged/<mode>_<tile_id>.tif
-  - If missing:
-      * Download dop20rgbi/dom1/dgm1 into a per-tile temp dir via LGLDownloader
-      * Unzip into tmp_root/tile_id/unzipped/{dop20rgbi,dom1,dgm1}
-      * Build the RGB/RGBI/RGBIH tile with TileDataset
-      * Save to output_tiles/merged
-      * Delete tmp_root/tile_id
+  - If output exists: output/merged/rgbih_<tile_id>.tif
+    - skip unless --overwrite
 
-Tile IDs are built from 'dop_kachel' as "32_355_6048".
+  - Else:
+      * Download dop20rgbi + dom1 + dgm1 using LGLDownloader
+      * Unzip into tmp_root/<tile_id>/unzipped/{dop20rgbi,dom1,dgm1}
+      * Build merged RGBIH tile using TileDataset (creates the TIFF)
+      * Compute height stats (min/max meters) from DOM - DGM
+      * Write JSON next to TIFF:
 
-Usage example (all tiles):
+        rgbih_<tile_id>.json:
+        {
+          "tile_id": "...",
+          "mode": "RGBIH",
+          "height_channel": {
+            "band_index_1based": 5,
+            "stats_m": [min_height_m, max_height_m],
+            "note": "Use these stats to unnormalize the height channel back to meters."
+          }
+        }
 
-  python job_dataset.py \
-      --tiles-gpkg data/urban_tiles.gpkg \
-      --tmp-root /mnt/.../tmp_lgl_tiles \
-      --output-tiles /mnt/.../tiles_rgbih \
-      --mode RGBIH
-
-Usage with index slicing (for SLURM arrays):
-
-  python research_code/jobs/job_dataset.py \
-      --tiles-gpkg /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/OpenGeoData/tiles.gpkg \
-      --tmp-root /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/tmp_lgl_tiles \
-      --output-tiles /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/tiles_rgbih \
-      --mode RGBIH \
-      --index-start 0 \
-      --index-end 100
+Does NOT modify any existing TIFF unless --overwrite.
 """
 
 import argparse
+import json
 import logging
+import os
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import geopandas as gpd
+import numpy as np
+import rasterio
 from tqdm import tqdm
 import sys
 
-# bring research code into path
+# bring project into path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
-logging.info(PROJECT_ROOT)
 
 from tree_genera_mapping.acquisition.lgl_downloader import LGLDownloader
 from tree_genera_mapping.preprocess.preprocess_tile import TileDataset
 
-
-# ------------- logging ------------- #
-
+NOTE = "Use these stats to unnormalize the height channel back to meters."
+# ------------------------- logging -------------------------
 def configure_logging():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
+# ------------------------- io helpers -------------------------
+def atomic_write_json(obj: dict, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, out_path)
 
-# ------------- helpers ------------- #
-
-def _find_tile_file_for_xy(
-    base_dir: Path,
-    product_prefix: str,
-    x: str,
-    y: str,
-    ext: str,
-) -> Optional[Path]:
-    """
-    Find the file for a specific (x,y) tile inside an unzipped LGL product directory.
-
-    We *only* require that the filename contains '_<x>_<y>_' or ends with '_<x>_<y><ext>'.
-    We do NOT assume a fixed '_2_bw' suffix anymore.
-    """
+def _find_single_file(base_dir: Path, patterns: List[str]) -> Optional[Path]:
+    """Return first match under base_dir for patterns (rglob)."""
     if not base_dir.exists():
         return None
-
-    # We accept both "..._x_y_..." and "..._x_y.ext"
-    needle1 = f"_{x}_{y}_"
-    needle2 = f"_{x}_{y}{ext}"
-
-    # Look for all candidate rasters of this product
-    # Example pattern: "dop20rgbi_32_*.tif"
-    pattern = f"{product_prefix}_32_*{ext}"
-
-    candidates = sorted(base_dir.rglob(pattern))
-    if not candidates:
-        logging.warning("No %s files at all found in %s", product_prefix, base_dir)
-        return None
-
-    matches = [
-        c for c in candidates
-        if (needle1 in c.name) or c.name.endswith(needle2)
-    ]
-
-    if not matches:
-        logging.warning("No %s tile matching x=%s, y=%s in %s", product_prefix, x, y, base_dir)
-        logging.info("Available candidates were: %s", [c.name for c in candidates])
-        return None
-
-    if len(matches) > 1:
-        logging.warning(
-            "Multiple %s tiles matching x=%s, y=%s in %s, picking first: %s",
-            product_prefix, x, y, base_dir, matches[0]
-        )
-
-    return matches[0]
+    for pattern in patterns:
+        candidates = sorted(base_dir.rglob(pattern))
+        if candidates:
+            return candidates[0]
+    return None
 
 
-def download_tile_to_temp(tile_id: str, tmp_root: Path):
+# ------------------------- tile id selection -------------------------
+def load_tile_ids_from_gpkg(tiles_gpkg: Path) -> List[str]:
+    """Read gpkg with 'dop_kachel' and return tile_ids like '32_355_6048'."""
+    gdf = gpd.read_file(tiles_gpkg)
+    if "dop_kachel" not in gdf.columns:
+        raise ValueError("GeoPackage must contain 'dop_kachel' column.")
+
+    tile_ids = gdf["dop_kachel"].astype(str).apply(lambda x: f"{x[:2]}_{x[2:5]}_{x[5:9]}").tolist()
+    return tile_ids
+
+
+# ------------------------- download/unzip -------------------------
+
+def download_tile_to_temp(tile_id: str, tmp_root: Path, products=("dop20rgbi", "dom1", "dgm1")) -> Tuple[Optional[Path], Optional[Path], Optional[Path], Path]:
     """
-    Download dop20rgbi, dom1, dgm1 for a single tile into a temp folder
-    and unzip them.
+    Download products for a tile into tmp_root/<tile_id>/ and unzip.
 
-    Layout:
-
-      tmp_root/tile_id/
-        ├── dop20rgbi/  (zips)
-        ├── dom1/
-        ├── dgm1/
-        └── unzipped/
-            ├── dop20rgbi/
-            ├── dom1/
-            └── dgm1/
-
-    Returns
-    -------
-    dop_path, dom_path, dgm_path, tmp_tile_dir
+    Returns: dop_path (.tif), dom_path (.tif), dgm_path (.xyz), tmp_tile_dir
     """
     prefix, x, y = tile_id.split("_")
     tmp_tile_dir = tmp_root / tile_id
@@ -143,13 +107,10 @@ def download_tile_to_temp(tile_id: str, tmp_root: Path):
         max_workers=3,
     )
 
-    logging.info("⬇️ Downloading products for tile %s into %s", tile_id, tmp_tile_dir)
-    products = ["dop20rgbi", "dom1", "dgm1"]
-
+    logging.info("⬇️ Downloading %s for tile %s", list(products), tile_id)
     for product in products:
         _ = downloader._download_single(product, x, y)
 
-    # unzip into unzipped/<product>/
     unzipped_dir = tmp_tile_dir / "unzipped"
     unzipped_dir.mkdir(parents=True, exist_ok=True)
 
@@ -168,67 +129,91 @@ def download_tile_to_temp(tile_id: str, tmp_root: Path):
             except zipfile.BadZipFile:
                 logging.error("Corrupt ZIP for %s: %s", product, zip_fp)
 
-    # --- pick the correct file for this (x,y) tile from the 2×2 block ---
-    dop_path = _find_tile_file_for_xy(
-        unzipped_dir / "dop20rgbi",
-        product_prefix="dop20rgbi",
-        x=x,
-        y=y,
-        ext=".tif",
-    )
-    dom_path = _find_tile_file_for_xy(
-        unzipped_dir / "dom1",
-        product_prefix="dom1",
-        x=x,
-        y=y,
-        ext=".tif",
-    )
-    dgm_path = _find_tile_file_for_xy(
-        unzipped_dir / "dgm1",
-        product_prefix="dgm1",
-        x=x,
-        y=y,
-        ext=".xyz",
-    )
+    # LGL naming stub (as in your existing script)
+    stub = f"{prefix}_{x}_{y}_2_bw"
 
-    if dop_path is None or dom_path is None or dgm_path is None:
-        logging.warning("⚠️ Missing some inputs for tile %s in temp dir %s", tile_id, tmp_tile_dir)
+    dop_path = _find_single_file(
+        unzipped_dir / "dop20rgbi",
+        [f"dop20rgbi_{stub}.tif", "dop20rgbi_*.tif", "*.tif"],
+    )
+    dom_path = _find_single_file(
+        unzipped_dir / "dom1",
+        [f"dom1_{stub}.tif", "dom1_*.tif", "*.tif"],
+    )
+    dgm_path = _find_single_file(
+        unzipped_dir / "dgm1",
+        [f"dgm1_{stub}.xyz", "dgm1_*.xyz", "*.xyz"],
+    )
 
     return dop_path, dom_path, dgm_path, tmp_tile_dir
 
 
-def process_tile_on_demand(row,
-                           tmp_root: Path,
-                           output_tiles: Path,
-                           mode: str,
-                           keep_tmp: bool = False):
+# ------------------------- height stats -------------------------
+
+def height_min_max_from_dom_dgm(dom_path: Path, dgm_xyz_path: Path) -> Tuple[float, float]:
     """
-    For a single tile:
-    - check if final merged tile exists -> skip
-    - otherwise:
-      * download inputs into tmp_root
-      * unzip under tmp_root/tile_id/unzipped
-      * build RGB/RGBI/RGBIH tile via TileDataset
-      * delete tmp folder (unless keep_tmp=True)
+    Compute min/max of height (meters) = DOM - DGM.
+    Reads DOM raster and DGM XYZ points, maps points to DOM pixels.
     """
-    tile_id = row["tile_id"]
+    with rasterio.open(dom_path) as src:
+        dom = src.read(1, masked=True).astype(np.float32, copy=False)
+        dom_arr = dom.filled(np.nan) if np.ma.isMaskedArray(dom) else dom
+        H, W = dom_arr.shape
+        transform = src.transform
+
+    vals = np.fromfile(dgm_xyz_path, sep=" ")
+    if vals.size % 3 != 0:
+        raise ValueError(f"Unexpected XYZ format: {dgm_xyz_path} (count={vals.size})")
+
+    vals = vals.reshape(-1, 3)
+    xs = vals[:, 0]
+    ys = vals[:, 1]
+    zs = vals[:, 2].astype(np.float32, copy=False)
+
+    rows, cols = rasterio.transform.rowcol(transform, xs, ys)
+    rows = np.asarray(rows, dtype=np.int64)
+    cols = np.asarray(cols, dtype=np.int64)
+
+    m = (rows >= 0) & (rows < H) & (cols >= 0) & (cols < W) & np.isfinite(zs)
+    if not m.any():
+        raise ValueError(f"No DGM points mapped into DOM extent for {dom_path.name}")
+
+    dom_vals = dom_arr[rows[m], cols[m]]
+    diffs = dom_vals - zs[m]
+    diffs = diffs[np.isfinite(diffs)]
+    if diffs.size == 0:
+        raise ValueError(f"No finite height diffs for {dom_path.name}")
+
+    return float(diffs.min()), float(diffs.max())
+
+
+# ------------------------- main per-tile -------------------------
+
+def build_rgbih_and_json_for_tile(
+    tile_id: str,
+    tmp_root: Path,
+    output_tiles: Path,
+    keep_tmp: bool = False,
+    overwrite: bool = False,
+):
     merged_dir = output_tiles / "merged"
     merged_dir.mkdir(parents=True, exist_ok=True)
 
-    out_path = merged_dir / f"{mode.lower()}_{tile_id}.tif"
-    if out_path.exists():
-        logging.info("✅ Merged tile exists, skipping: %s", out_path)
-        return
+    out_tif  = merged_dir / f"rgbih_{tile_id}.tif"
+    out_json = merged_dir / f"rgbih_{tile_id}.json"
 
-    logging.info("🚀 Processing tile_id=%s", tile_id)
+    if out_tif.exists() and out_json.exists() and (not overwrite):
+        logging.info("✅ Exists (tif+json), skipping: %s", tile_id)
+        return
 
     dop_path, dom_path, dgm_path, tmp_tile_dir = download_tile_to_temp(tile_id, tmp_root)
     if dop_path is None or dom_path is None or dgm_path is None:
-        logging.error("❌ Missing dop/dom/dgm for tile %s, skipping", tile_id)
+        logging.error("❌ Missing dop/dom/dgm for tile %s. dop=%s dom=%s dgm=%s", tile_id, dop_path, dom_path, dgm_path)
         if not keep_tmp and tmp_tile_dir.exists():
             shutil.rmtree(tmp_tile_dir, ignore_errors=True)
         return
 
+    # Build tile (RGBIH = RGB + NIR + height band)
     tile = TileDataset(
         tile_id=tile_id,
         dop_path=str(dop_path),
@@ -236,148 +221,50 @@ def process_tile_on_demand(row,
         dgm_path=str(dgm_path),
         dom_path=str(dom_path),
         output_dir=str(output_tiles),
-        mode=mode,
+        mode="RGBIH",
         temp_dir=str(tmp_root),
     )
-    result = tile.process()
-    logging.info("💾 Created tile: %s", result)
+    _ = tile.process()
+
+    # Height min/max (meters)
+    mn, mx = height_min_max_from_dom_dgm(dom_path, dgm_path)
+
+    # Write json next to tif (in merged/)
+    obj = {
+        "tile_id": tile_id,
+        "mode": "RGBIH",
+        "height_channel": {
+            "band_index_1based": 5,
+            "stats_m": [mn, mx],
+            "note": NOTE,
+        },
+    }
+    atomic_write_json(obj, out_json)
+    logging.info("🧾 Wrote JSON: %s", out_json)
 
     if not keep_tmp and tmp_tile_dir.exists():
-        logging.info("🧹 Removing temp dir %s", tmp_tile_dir)
         shutil.rmtree(tmp_tile_dir, ignore_errors=True)
 
 
-def run_dataset_phase_on_demand(tiles_gpkg: Path,
-                                tmp_root: Path,
-                                output_tiles: Path,
-                                mode: str,
-                                keep_tmp: bool = False,
-                                index_start: int | None = None,
-                                index_end: int | None = None):
-    """
-    Main driver: on-demand per-tile download & processing.
-
-    If index_start/index_end are None -> process all tiles.
-    Otherwise, process tiles in [index_start, index_end) by row index.
-    """
-    logging.info("🧱 On-demand dataset generation")
-    logging.info("   tiles_gpkg   = %s", tiles_gpkg)
-    logging.info("   tmp_root     = %s", tmp_root)
-    logging.info("   output_tiles = %s", output_tiles)
-    logging.info("   mode         = %s", mode)
-    logging.info("   keep_tmp     = %s", keep_tmp)
-    logging.info("   index_start  = %s", index_start)
-    logging.info("   index_end    = %s", index_end)
-
-    gdf = gpd.read_file(tiles_gpkg)
-    if "dop_kachel" not in gdf.columns:
-        raise ValueError("GeoPackage must contain 'dop_kachel' column")
-
-    # build tile_id "32_355_6048" from dop_kachel string "323556048"
-    gdf["tile_id"] = gdf["dop_kachel"].astype(str).apply(
-        lambda x: f"{x[:2]}_{x[2:5]}_{x[5:9]}"
-    )
-
-    n_tiles = len(gdf)
-    logging.info("Total tiles in GeoPackage: %d", n_tiles)
-
-    # --- decide which rows to process ---
-    if index_start is None and index_end is None:
-        sel = gdf
-        logging.info("Processing ALL tiles")
-    else:
-        # default / clamp
-        if index_start is None:
-            index_start = 0
-        if index_end is None:
-            index_end = n_tiles
-
-        # if the whole range is after the last tile -> nothing to do
-        if index_start >= n_tiles:
-            logging.info(
-                "Requested range [%d, %d) is outside available tiles (0..%d). Nothing to do.",
-                index_start, index_end, n_tiles - 1
-            )
-            return
-
-        # clip to dataset bounds
-        index_start = max(0, index_start)
-        index_end = min(index_end, n_tiles)
-
-        if index_end <= index_start:
-            logging.info(
-                "Requested range [%d, %d) is empty after clipping. Nothing to do.",
-                index_start, index_end
-            )
-            return
-
-        sel = gdf.iloc[index_start:index_end]
-        logging.info(
-            "Processing tile indices [%d, %d) → %d tiles",
-            index_start, index_end, len(sel)
-        )
-
-    tmp_root.mkdir(parents=True, exist_ok=True)
-
-    for _, row in tqdm(sel.iterrows(), total=len(sel), desc="Tiles"):
-        try:
-            process_tile_on_demand(
-                row=row,
-                tmp_root=tmp_root,
-                output_tiles=output_tiles,
-                mode=mode,
-                keep_tmp=keep_tmp,
-            )
-            logging.info(f"Tile-{row['tile_id']} is Done!")
-        except Exception as e:
-            logging.error("❌ Failed to process tile %s: %s", row.get("tile_id", "<unknown>"), e)
-
-
-# ------------- CLI ------------- #
+# ------------------------- CLI -------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="On-demand RGB/RGBI/RGBIH dataset builder")
+    p = argparse.ArgumentParser(description="Build RGBIH tiles + JSON metadata")
 
-    parser.add_argument(
-        "--tiles-gpkg",
-        required=True,
-        help="Path to the GeoPackage with a 'dop_kachel' column",
-    )
-    parser.add_argument(
-        "--tmp-root",
-        required=True,
-        help="Temporary folder for per-tile downloads",
-    )
-    parser.add_argument(
-        "--output-tiles",
-        required=True,
-        help="Output folder; script writes to OUTPUT/merged/",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["RGB", "RGBI", "RGBIH"],
-        default="RGBIH",
-        help="Dataset variant; RGBIH gives 5 bands (RGBI + H)",
-    )
-    parser.add_argument(
-        "--keep-tmp",
-        action="store_true",
-        help="Do NOT delete per-tile tmp directories (for debugging)",
-    )
-    parser.add_argument(
-        "--index-start",
-        type=int,
-        default=None,
-        help="Optional 0-based start index (inclusive) of tiles to process",
-    )
-    parser.add_argument(
-        "--index-end",
-        type=int,
-        default=None,
-        help="Optional 0-based end index (exclusive) of tiles to process",
-    )
+    p.add_argument("--tiles-gpkg", required=True, help="GeoPackage containing 'dop_kachel'")
+    p.add_argument("--tmp-root", required=True, help="Temp folder for downloads/unzips")
+    p.add_argument("--output-tiles", required=True, help="Output folder; writes to OUTPUT/merged/")
+    p.add_argument("--keep-tmp", action="store_true", help="Keep per-tile temp directories")
+    p.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
 
-    return parser.parse_args()
+    # Preferred for open-access usage:
+    p.add_argument(
+        "--tile-ids",
+        nargs="*",
+        default=None,
+        help="Optional explicit tile_ids like: 32_355_6048 32_356_6048. If omitted, uses all tiles from --tiles-gpkg.",
+    )
+    return p.parse_args()
 
 
 def main():
@@ -388,15 +275,27 @@ def main():
     tmp_root = Path(args.tmp_root)
     output_tiles = Path(args.output_tiles)
 
-    run_dataset_phase_on_demand(
-        tiles_gpkg=tiles_gpkg,
-        tmp_root=tmp_root,
-        output_tiles=output_tiles,
-        mode=args.mode,
-        keep_tmp=args.keep_tmp,
-        index_start=args.index_start,
-        index_end=args.index_end,
-    )
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    output_tiles.mkdir(parents=True, exist_ok=True)
+
+    if args.tile_ids and len(args.tile_ids) > 0:
+        tile_ids = args.tile_ids
+        logging.info("Processing %d explicit tile_ids", len(tile_ids))
+    else:
+        tile_ids = load_tile_ids_from_gpkg(tiles_gpkg)
+        logging.info("Processing ALL tiles from gpkg: %d tiles", len(tile_ids))
+
+    for tile_id in tqdm(tile_ids, desc="Tiles"):
+        try:
+            build_rgbih_and_json_for_tile(
+                tile_id=tile_id,
+                tmp_root=tmp_root,
+                output_tiles=output_tiles,
+                keep_tmp=args.keep_tmp,
+                overwrite=args.overwrite,
+            )
+        except Exception as e:
+            logging.exception("❌ Failed tile %s: %s", tile_id, e)
 
 
 if __name__ == "__main__":
