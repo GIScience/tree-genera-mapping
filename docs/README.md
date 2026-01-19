@@ -1,11 +1,11 @@
 # End-to-End Training and Inference Pipeline
 This repository provides a workflow for urban tree detection and genus mapping. The pipeline writes all intermediate outputs to `cache/` (ignored by git). The only committed spatial dataset is `data/tiles.gpkg` (1×1 km grid).
 
-## Run the pre-trained YOLOv11l model 5CH imagery
+## How to run the pre-trained YOLOv11l model 5CH imagery
 
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
-python acquisition/run_tile_dataset.py 
+python acquisition/run_tile_dataset.py  
 ```
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
@@ -14,8 +14,7 @@ python jobs/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/til
 ```
 
 
-## Teacher Ensemble Training with Human-in-the-Loop Curation:
-
+## Tree Genera Mapping Teacher-Student Ensemble Training with Human-in-the-Loop Curation:
 - Train teacher models using the initial weak and reference labels:
   - a tree detection teacher model, 
   - a tree genus classification teacher model.
@@ -23,7 +22,7 @@ python jobs/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/til
 - Perform human-in-the-loop curation on the predictions to improve label quality.
   - visual validation  and manual correction of predictions in QGIS.
 - Treat the curated outputs as hard labels to form the final training dataset.
-### Preprocessing Steps:
+### Teacher Ensemble Steps:
 1. Generate weak tree labels from NDVI + height thresholds:
 ```bash
 python preprocess/tree_delineation.py --tiles-dir cache/tiles_5ch --output-gpkg cache/weak_tree_bboxes.gpkg
@@ -57,7 +56,7 @@ python train/teacher_tree_train.py
 python train/teacher_genus_train.py
 ```
 
-## Student Model Training:
+### Student Model Training:
    1. Download train images and curated pseudo-labels labels via `url-link` -> cache
    2. Train a YOLOv11-L student model
 ```bash
