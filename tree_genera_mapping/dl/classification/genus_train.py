@@ -173,7 +173,6 @@ def split_train_val_fallback(df: pd.DataFrame, val_frac: float, seed: int) -> Tu
     return train_df.reset_index(drop=True), val_df.reset_index(drop=True)
 
 
-
 # ----------------------------- train / eval -----------------------------
 def train_one_epoch(
     model: nn.Module,

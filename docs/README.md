@@ -10,7 +10,7 @@ python acquisition/run_tile_dataset.py
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
 ```bash
-python jobs/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
+python scripts/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
 ```
 
 
@@ -38,7 +38,7 @@ python preprocess/segment_trees.py \
 - GreeHill tree inventory (.gpkg) with columns: tree_id, genus, canopyWidt, geometry (Point), CRS in meters (e.g., EPSG:25832). Download via `url-link-to-GreeHill-dataset`
 - Prepare GreeHill  labels (with optional canopy bounding boxes):
 ```bash
-python preprocess/prepare_genus_labels.py --trees /path/to/GreeHill_dataset.gpkg --labels conf/genera_labels.csv --output cache/tree_labels_bbox.gpkg --make-bbox
+python scripts/segment_trees.py --trees /path/to/GreeHill_dataset.gpkg --labels conf/genera_labels.csv --output cache/weak_bboxes.gpkg --make-bbox
 ```
 
 3. Generate Initial Training Datasets for Teacher Ensemble Models:
@@ -46,25 +46,27 @@ python preprocess/prepare_genus_labels.py --trees /path/to/GreeHill_dataset.gpkg
 3.1. detection (YOLO images + txt labels)
 - **NOTE: HUMAN-IN-THE-LOOP CURATION** of tree labels before running generation of training labels. QGIS can be used to visualize and edit the generated weak tree bounding boxes.  
 ```bash
- python preprocess/generate_train_dataset.py det \
+ python scripts/generate_train_dataset.py det \
   --tiles-gpkg data/tiles.gpkg \
-  --weak-bboxes-gpkg outputs/tree_bboxes_merged.gpkg \
-  --images-dir /data/tiles/merged \
-  --output-dir datasets \
-  --mode rgbih
+  --weak-bboxes-gpkg cache/weak_bboxes.gpkg \
+  --images-dir /path/to/tiles \
+  --output-dir /path/to/out \
+  --mode rgbih \
+  --val-frac 0.2 
 ```
 
 3.2. Genus patches (classification dataset)
 - this is an image with 5-channels (RGB + IR + Height) and corresponding genus labels for each tree/patch.
 - Size is uniform for all patches (e.g., 128x128px) 
 ```bash
-python preprocess/generate_train_dataset.py patches \
+python scripts/generate_train_dataset.py patches \
   --tiles-gpkg data/tiles.gpkg \
-  --genus-labels-gpkg data/tree_labels.gpkg \
-  --images-dir /data/tiles/merged \
-  --output-dir datasets \
+  --genus-labels-gpkg cache/genus_labels.gpkg \
+  --images-dir /path/to/tiles \
+  --output-dir /path/to/out \
   --mode rgbih \
-  --patch-size 128
+  --patch-size 128 \
+  --val-frac 0.2 
 ```
 
 4. Train Teacher Models:

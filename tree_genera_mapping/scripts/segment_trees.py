@@ -155,7 +155,7 @@ def run_segmentation_batch(
     peak_params: PeakParams,
     smooth: SmoothParams,
     seg: SegmentParams,
-    make_bbox: bool,
+    write_pol: bool,
     write_masks: bool,
     mask_encoding: str,
 ) -> None:
@@ -219,16 +219,16 @@ def run_segmentation_batch(
             logger.info("Empty segmentation for %s; skipping write.", tile_id)
             continue
 
-        out_poly = output_dir / f"trees_segmented_{tile_id}.gpkg"
-        gdf.to_file(out_poly, driver="GPKG")
-        logger.info("Saved %d polygons -> %s", len(gdf), out_poly)
+        gdf_bbox = gdf.copy()
+        gdf_bbox["geometry"] = gdf_bbox.geometry.envelope
+        out_bbox = output_dir / f"trees_bbox_{tile_id}.gpkg"
+        gdf_bbox.to_file(out_bbox, driver="GPKG")
+        logger.info("Saved %d bbox polygons -> %s", len(gdf_bbox), out_bbox)
 
-        if make_bbox:
-            gdf_bbox = gdf.copy()
-            gdf_bbox["geometry"] = gdf_bbox.geometry.envelope
-            out_bbox = output_dir / f"trees_bbox_{tile_id}.gpkg"
-            gdf_bbox.to_file(out_bbox, driver="GPKG")
-            logger.info("Saved %d bbox polygons -> %s", len(gdf_bbox), out_bbox)
+        if write_pol:
+            out_poly = output_dir / f"trees_segmented_{tile_id}.gpkg"
+            gdf.to_file(out_poly, driver="GPKG")
+            logger.info("Saved %d polygons -> %s", len(gdf), out_poly)
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -237,7 +237,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--mode", choices=["ndom", "rgbih"], required=True)
 
-    ap.add_argument("--make-bbox", action="store_true")
+    ap.add_argument("--write-pols", action="store_true")
     ap.add_argument("--write-masks", action="store_true")
     ap.add_argument("--mask-encoding", choices=["01", "0255"], default="01")
 
@@ -300,7 +300,7 @@ def main():
         peak_params=peak_params,
         smooth=smooth,
         seg=seg,
-        make_bbox=args.make_bbox,
+        write_pol=args.write_pols,
         write_masks=args.write_masks,
         mask_encoding=args.mask_encoding,
     )

@@ -20,7 +20,7 @@ Notes
 - Assumes labels live in a "labels" folder mirroring the "images" folder (common YOLO layout).
 
 Example
-python jobs/yolo_eval.py \
+python scripts/yolo_eval.py \
   --data conf/data.yaml \
   --weights runs/detect/train/weights/best.pt \
   --imgsz 1024 \
