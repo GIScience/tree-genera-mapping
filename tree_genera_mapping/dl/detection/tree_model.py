@@ -1,9 +1,20 @@
 """
-Detection model builder supporting Faster R-CNN and DETR for 3, 4, and 5-channel input images.
+tree_model.py
 
-Backbones:
-- ResNet50, ResNet101, ResNet152 (with FPN for Faster R-CNN)
-- ResNet50 for DETR
+Model factory for tree crown detection.
+Supports:
+- Faster R-CNN (torchvision) with ResNet-FPN backbones: resnet50, resnet101, resnet152
+- DETR (HuggingFace transformers) with ResNet-50 backbone
+
+Multi-channel input:
+- Works with 3, 4, 5 (or N>=3) channel tensors
+- Conv1 weights:
+    - First 3 channels copy pretrained RGB weights
+    - Extra channels are initialized as the mean of RGB weights (stable default)
+
+Notes:
+- Faster R-CNN uses GeneralizedRCNNTransform for normalization.
+  You SHOULD pass channel mean/std that matches your dataset preprocessing.
 
 Torchvision Models:
 https://pytorch.org/vision/stable/models.html#object-detection
@@ -12,107 +23,179 @@ Original Papers:
 - Faster R-CNN: https://arxiv.org/abs/1506.01497
 - DETR: https://arxiv.org/abs/2005.12872
 """
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Optional, Literal
+
 import torch
 import torch.nn as nn
+
 from torchvision.models.detection import FasterRCNN
-from torchvision.models.detection.transform import GeneralizedRCNNTransform
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
+from torchvision.models.detection.transform import GeneralizedRCNNTransform
 
-from transformers import DetrForObjectDetection
+try:
+    from transformers import DetrForObjectDetection
+except Exception:  # transformers optional
+    DetrForObjectDetection = None
 
 
-# -------------------- Model Registry --------------------
-MODEL_REGISTRY = {
-    "resnet50": "resnet50",
-    "resnet101": "resnet101",
-    "resnet152": "resnet152",
-}
+BackboneName = Literal["resnet50", "resnet101", "resnet152"]
+DetectorName = Literal["fasterrcnn", "detr"]
 
-# -------------------- Modify Conv1 for multi-channel input --------------------
-def modify_resnet_input_channels(model, in_channels):
-    old_conv = model.backbone.body.conv1
+
+@dataclass(frozen=True)
+class NormalizeConfig:
+    mean: List[float]
+    std: List[float]
+    min_size: int = 800
+    max_size: int = 1333
+
+
+def _expand_conv_in_channels(conv: nn.Conv2d, in_channels: int) -> nn.Conv2d:
+    """
+    Create a new conv with in_channels, copying pretrained weights:
+    - RGB copied to first 3 channels
+    - extra channels = mean over RGB weights
+    """
+    if in_channels < 3:
+        raise ValueError("in_channels must be >= 3")
+
     new_conv = nn.Conv2d(
-        in_channels, old_conv.out_channels,
-        kernel_size=old_conv.kernel_size,
-        stride=old_conv.stride,
-        padding=old_conv.padding,
-        bias=False
+        in_channels=in_channels,
+        out_channels=conv.out_channels,
+        kernel_size=conv.kernel_size,
+        stride=conv.stride,
+        padding=conv.padding,
+        dilation=conv.dilation,
+        groups=conv.groups,
+        bias=(conv.bias is not None),
+        padding_mode=conv.padding_mode,
     )
+
     with torch.no_grad():
-        # Copy pretrained RGB weights
-        new_conv.weight[:, :3] = old_conv.weight
+        # copy RGB
+        new_conv.weight[:, :3] = conv.weight[:, :3]
+
+        # init extra channels
         if in_channels > 3:
-            # Extra channels replicate mean of first 3
             extra = in_channels - 3
-            mean_extra = old_conv.weight[:, :3].mean(dim=1, keepdim=True)
-            new_conv.weight[:, 3:] = mean_extra.repeat(1, extra, 1, 1)
-    model.backbone.body.conv1 = new_conv
-    return model
+            mean_rgb = conv.weight[:, :3].mean(dim=1, keepdim=True)  # [out,1,k,k]
+            new_conv.weight[:, 3:] = mean_rgb.repeat(1, extra, 1, 1)
 
-# -------------------- Get Faster R-CNN --------------------
-def get_faster_rcnn(num_classes=2, in_channels=5, backbone_name="resnet50"):
-    if backbone_name not in MODEL_REGISTRY:
-        raise ValueError(f"Unsupported backbone: {backbone_name}. Choose from {list(MODEL_REGISTRY.keys())}")
+        if conv.bias is not None:
+            new_conv.bias.copy_(conv.bias)
 
-    backbone = resnet_fpn_backbone(MODEL_REGISTRY[backbone_name], pretrained=True)
+    return new_conv
+
+
+def _default_norm(in_channels: int) -> NormalizeConfig:
+    # Safe placeholder defaults (you can override from CLI).
+    return NormalizeConfig(
+        mean=[0.5] * in_channels,
+        std=[0.25] * in_channels,
+        min_size=800,
+        max_size=1333,
+    )
+
+
+def get_faster_rcnn(
+    *,
+    num_classes: int,
+    in_channels: int = 5,
+    backbone_name: BackboneName = "resnet50",
+    pretrained_backbone: bool = True,
+    norm: Optional[NormalizeConfig] = None,
+) -> FasterRCNN:
+    """
+    Build Faster R-CNN with ResNet-FPN backbone.
+    num_classes includes background class? (torchvision expects num_classes INCLUDING background)
+    Usually: num_classes = 2 for {background, tree}.
+    """
+    backbone = resnet_fpn_backbone(backbone_name, pretrained=pretrained_backbone)
+
+    # Modify backbone conv1 BEFORE passing into FasterRCNN (less fragile)
+    # backbone.body is a ResNet
+    backbone.body.conv1 = _expand_conv_in_channels(backbone.body.conv1, in_channels)
 
     model = FasterRCNN(backbone, num_classes=num_classes)
 
-    model = modify_resnet_input_channels(model, in_channels=in_channels)
+    # Normalize config
+    if norm is None:
+        norm = _default_norm(in_channels)
 
     model.transform = GeneralizedRCNNTransform(
-        min_size=800,
-        max_size=1333,
-        image_mean=[0.5] * in_channels,
-        image_std=[0.25] * in_channels
+        min_size=norm.min_size,
+        max_size=norm.max_size,
+        image_mean=norm.mean,
+        image_std=norm.std,
     )
 
     return model
-# -------------------- Get DETR --------------------
-def get_detr_5ch(num_classes=2):
-    model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
 
-    # Modify the first convolution layer in the ResNet backbone
+
+def get_detr(
+    *,
+    num_classes: int,
+    in_channels: int = 5,
+    pretrained_name: str = "facebook/detr-resnet-50",
+) -> nn.Module:
+    """
+    Build DETR from transformers with expanded input channels.
+    Requires `transformers` installed.
+
+    For DETR, num_classes should be the number of object classes (not including "no object"),
+    but HuggingFace DETR heads often include an extra background internally.
+    We'll just set classifier output to num_classes.
+    """
+    if DetrForObjectDetection is None:
+        raise ImportError("transformers is not installed; cannot build DETR.")
+
+    model = DetrForObjectDetection.from_pretrained(pretrained_name)
+
+    # Expand conv1 on ResNet backbone
     old_conv = model.model.backbone.conv1
-    new_conv = nn.Conv2d(
-        in_channels=5, out_channels=old_conv.out_channels,
-        kernel_size=old_conv.kernel_size,
-        stride=old_conv.stride,
-        padding=old_conv.padding,
-        bias=False
-    )
-
-    with torch.no_grad():
-        new_conv.weight[:, :3] = old_conv.weight
-        if 5 > 3:
-            extra = 5 - 3
-            mean_extra = old_conv.weight[:, :3].mean(dim=1, keepdim=True)
-            new_conv.weight[:, 3:] = mean_extra.repeat(1, extra, 1, 1)
-
-    model.model.backbone.conv1 = new_conv
+    model.model.backbone.conv1 = _expand_conv_in_channels(old_conv, in_channels)
 
     # Replace classification head
-    model.class_labels_classifier = nn.Linear(model.class_labels_classifier.in_features, num_classes)
-
+    model.class_labels_classifier = nn.Linear(
+        model.class_labels_classifier.in_features,
+        num_classes,
+    )
     return model
-# -------------------- Main Function for Summary --------------------
-if __name__ == "__main__":
-    from torchinfo import summary
-    import torch
 
-    # Choose parameters
-    num_classes = 2
-    in_channels = 5  # Try 3, 4, or 5
-    backbone = 'resnet101'  # 'resnet50', 'resnet101', 'resnet152'
 
-    # Instantiate the model
-    model = get_faster_rcnn(num_classes=num_classes, in_channels=in_channels, backbone_name=backbone)
+def build_detector(
+    *,
+    detector: DetectorName,
+    num_classes: int,
+    in_channels: int,
+    backbone: BackboneName = "resnet50",
+    norm_mean: Optional[List[float]] = None,
+    norm_std: Optional[List[float]] = None,
+    pretrained_backbone: bool = True,
+) -> nn.Module:
+    """
+    Unified factory used by training code.
+    """
+    if detector == "fasterrcnn":
+        norm = None
+        if norm_mean is not None or norm_std is not None:
+            if norm_mean is None or norm_std is None:
+                raise ValueError("Provide both norm_mean and norm_std or neither.")
+            if len(norm_mean) != in_channels or len(norm_std) != in_channels:
+                raise ValueError("norm_mean/std must match in_channels.")
+            norm = NormalizeConfig(mean=norm_mean, std=norm_std)
+        return get_faster_rcnn(
+            num_classes=num_classes,
+            in_channels=in_channels,
+            backbone_name=backbone,
+            pretrained_backbone=pretrained_backbone,
+            norm=norm,
+        )
 
-    # Set model to eval mode for summary
-    model.eval()
+    if detector == "detr":
+        return get_detr(num_classes=num_classes, in_channels=in_channels)
 
-    # Generate dummy input for summary
-    input_size = (1, in_channels, 640, 640)
-
-    # Print summary (note: for detection models, this is mostly useful for backbone)
-    summary(model.backbone.body, input_size=input_size, device="cpu")
+    raise ValueError(f"Unknown detector: {detector}")
