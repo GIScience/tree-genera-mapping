@@ -1,193 +1,303 @@
+#!/usr/bin/env python3
 """
 generate_training_dataset.py
 
-Generate training data for:
-1) Tree detection dataset (tiles + labels) from weak tree bboxes
-2) Classification patches (e.g., 128x128) from genus labels
+Generate training data for two model types:
 
-This script is intentionally path-agnostic:
-- users must provide input paths via CLI
-- outputs go to user-defined output directories
+1) YOLO detection dataset (chips + bbox labels)
+   - Input: weak bboxes GeoPackage (polygons or boxes)
+   - Input: tiles GeoPackage (tile footprints)
+   - Input: merged raster tiles folder with:
+       <images-dir>/<mode>_<tile_id>.tif
+     e.g. dir/rgbih_32_355_6048.tif
+
+2) Image classification dataset (patches around labeled trees)
+   - Input: genus labels GeoPackage (points or polygons) with class column
+   - Input: tiles GeoPackage (tile footprints)
+   - Input: merged raster tiles folder (same pattern as above)
+
+Notes
+- No hardcoded paths. Everything is provided via CLI.
+- Assumes your tile filenames use tile_id like: 32_355_6048
+- If tiles.gpkg uses dop_kachel like: 323556048 (string),
+  we can derive tile_id via helper below.
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from tqdm import tqdm
+from typing import Optional, Tuple
 
 import geopandas as gpd
 import rasterio
 from rasterio.windows import Window
+from tqdm import tqdm
 
 from tree_genera_mapping.preprocess.dataset import ImageDataSet
-from tree_genera_mapping.preprocess.prepare_genus_labels import generate_training_labels
 
-from shapely.geometry import box
-from shapely.geometry.base import BaseGeometry
-from rasterio.merge import merge as merge_tiles
-import shutil
-import numpy as np
-import warnings
-# -----------------------------
-# LOGGING
-# -----------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-)
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 
 # -----------------------------
-# 1) Detection dataset
-# -------------------------
-def process_ds_obd(raw_img_path:str,
-                   output_base_dir:str):
-    # Example usage of generating training dataset
-    tile_dir = Path(raw_img_path)
-    mode = tile_dir.name.split('_')[-1]
-    output_dir = Path(f'{output_base_dir}/bboxes_{mode}')
-    output_dir.mkdir(parents=True, exist_ok=True)
+# helpers
+# -----------------------------
 
-    # Read trees and tiles
-    gdf_tree = gpd.read_file('cache/tree_bboxes_merged.gpkg')
-    gdf_tiles = gpd.read_file('data/tiles.gpkg')
+def dopkachel_to_tile_id(dop_kachel: str) -> str:
+    """
+    Convert BW dop_kachel string like '323556048' -> '32_355_6048'
+    """
+    s = str(dop_kachel)
+    if len(s) < 9:
+        raise ValueError(f"dop_kachel looks too short: {dop_kachel}")
+    return f"{s[:2]}_{s[2:5]}_{s[-4:]}"
 
-    # Ensure both GeoDataFrames have the same CRS
-    if gdf_tiles.crs != gdf_tree.crs:
-        gdf_tree = gdf_tree.to_crs(gdf_tiles.crs)
-        logger.info(f'Reprojected gdf_tree to {gdf_tiles.crs}')
 
-    # Perform spatial join to find intersecting tiles
+def find_tile_raster(images_dir: Path, mode: str, tile_id: str) -> Path:
+    """
+    Expected merged tile naming:
+      <images_dir>/<mode>_<tile_id>.tif
+    """
+    return images_dir / f"{mode}_{tile_id}.tif"
+
+
+def ensure_same_crs(a: gpd.GeoDataFrame, b: gpd.GeoDataFrame) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    if a.crs is None or b.crs is None:
+        raise ValueError("Both GeoDataFrames must have CRS set.")
+    if a.crs != b.crs:
+        b = b.to_crs(a.crs)
+    return a, b
+
+
+# -----------------------------
+# 1) YOLO detection dataset
+# -----------------------------
+
+def make_detection_dataset(
+    *,
+    tiles_gpkg: str,
+    weak_bboxes_gpkg: str,
+    images_dir: str,
+    output_dir: str,
+    mode: str,
+    tile_id_col: str = "tile_id",
+    size: int = 640,
+    overlap: float = 0.0,
+) -> None:
+    """
+    Builds YOLO-ready dataset from weak bboxes.
+
+    - tiles_gpkg: tile polygons
+    - weak_bboxes_gpkg: bbox polygons with at least geometry + (optionally tile id)
+    - images_dir: directory containing dir/ tiles
+    - output_dir: destination
+    - mode: 'rgb', 'rgbi', 'rgbih'
+    """
+    images_dir_p = Path(images_dir)
+    output_dir_p = Path(output_dir) / f"yolo_{mode}"
+    output_dir_p.mkdir(parents=True, exist_ok=True)
+
+    gdf_tiles = gpd.read_file(tiles_gpkg)
+    gdf_tree = gpd.read_file(weak_bboxes_gpkg)
+
+    if gdf_tiles.empty:
+        raise ValueError(f"No tiles found in {tiles_gpkg}")
+    if gdf_tree.empty:
+        raise ValueError(f"No bboxes found in {weak_bboxes_gpkg}")
+
+    gdf_tiles, gdf_tree = ensure_same_crs(gdf_tiles, gdf_tree)
+
+    # Find tiles that intersect with any bbox
+    matching_idxs = None
     try:
-        matching_idxs = gpd.sjoin(gdf_tiles, gdf_tree, how='inner', predicate='intersects').index.unique()
-    except:
-        tiles = gdf_tree['tile_id'].unique()
-        matching_idxs = gdf_tiles[gdf_tiles['tile_id'].isin(tiles)].index.unique()
-    finally:
-        # Filter tiles that intersect with trees
-        gdf_tiles_filtered = gdf_tiles.loc[matching_idxs]
-        gdf_tiles_filtered['image_path'] = gdf_tiles_filtered['tile_id'].apply(
-            lambda x: tile_dir / 'merged' / f"{mode}_{x}.tif")
+        matching_idxs = gpd.sjoin(gdf_tiles, gdf_tree, how="inner", predicate="intersects").index.unique()
+    except Exception:
+        # fallback: if weak bboxes already have tile_id, filter by that
+        if tile_id_col in gdf_tree.columns and tile_id_col in gdf_tiles.columns:
+            tiles = set(gdf_tree[tile_id_col].astype(str).unique())
+            matching_idxs = gdf_tiles[gdf_tiles[tile_id_col].astype(str).isin(tiles)].index.unique()
+        else:
+            raise RuntimeError(
+                "Spatial join failed and cannot fallback by tile id column. "
+                f"Check CRS and ensure '{tile_id_col}' exists in both files."
+            )
 
-        dataset = ImageDataSet(
-            img_dir=tile_dir,
-            output_dir=output_dir,
-            mode=mode,
-            size=640,
-            overlap=0.0
-        )
+    gdf_tiles_filtered = gdf_tiles.loc[matching_idxs].copy()
+    if gdf_tiles_filtered.empty:
+        logger.warning("No tiles intersect with bboxes. Nothing to do.")
+        return
 
-        for _, row in tqdm(gdf_tiles_filtered.iterrows(), total=len(gdf_tiles_filtered), desc="Processing tiles"):
-            tile_path = row['image_path']
-            if not tile_path.exists():
-                logger.warning(f"Tile {tile_path} does not exist, skipping.")
-                continue
-            dataset.split_tiff_to_tiles(tile_path, gdf_tree)
+    # Ensure we have tile_id in tile table. If only dop_kachel exists, derive tile_id.
+    if tile_id_col not in gdf_tiles_filtered.columns:
+        if "dop_kachel" in gdf_tiles_filtered.columns:
+            gdf_tiles_filtered[tile_id_col] = gdf_tiles_filtered["dop_kachel"].astype(str).apply(dopkachel_to_tile_id)
+        else:
+            raise ValueError(f"Tiles file must contain '{tile_id_col}' or 'dop_kachel'.")
 
-# -------------------------
-# 2) Classification patches
-# -------------------------
-def make_classification_patches(raw_img_path:str, output_base_dir: str):
-    if not Path('data/tree_labels.gpkg').exists():
-        gdf_tree = generate_training_labels()
-    else:
-        gdf_tree = gpd.read_file('data/tree_labels.gpkg')
+    dataset = ImageDataSet(
+        img_dir=images_dir_p,
+        output_dir=output_dir_p,
+        mode=mode,
+        size=size,
+        overlap=overlap,
+    )
 
-    tile_dir = Path(raw_img_path)
-    mode = tile_dir.name.split('_')[-1]
-    output_dir = Path(f'{output_base_dir}/tree_patches_128_{mode}')
-    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Processing %d tiles for detection dataset...", len(gdf_tiles_filtered))
 
-    gdf_tiles = gpd.read_file('data/tiles.gpkg')
+    for _, row in tqdm(gdf_tiles_filtered.iterrows(), total=len(gdf_tiles_filtered), desc="Detection tiles"):
+        tile_id = str(row[tile_id_col])
+        tile_path = find_tile_raster(images_dir_p, mode, tile_id)
 
-    if gdf_tiles.crs != gdf_tree.crs:
-        gdf_tree = gdf_tree.to_crs(gdf_tiles.crs)
-        logger.info(f'Reprojected gdf_tree to {gdf_tiles.crs}')
-
-    patch_size = 128  # pixels
-    half_size = patch_size // 2
-
-    for idx, tree in tqdm(gdf_tree.iterrows(), total=len(gdf_tree), desc="Generating 128x128 patches"):
-        centroid = tree.geometry.centroid
-        class_name = str(tree.get('training_class', 'unknown')).replace(' ', '_')
-        output_id = tree.get('uuid', idx)
-
-        intersecting_tiles = gdf_tiles[gdf_tiles.intersects(centroid.buffer(0.01))]
-        if intersecting_tiles.empty:
+        if not tile_path.exists():
+            logger.warning("Missing tile raster: %s (skipping)", tile_path)
             continue
 
-        # Find tile image that contains this centroid
-        tile_path = None
-        tile_ids = intersecting_tiles['dop_kachel'].apply(lambda x: f"{x[:2]}_{x[2:5]}_{x[-4:]}")  # 324645487
-        for tile_id in tile_ids:
-            candidate_path = tile_dir / 'merged' / f"{mode}_{tile_id}.tif"
-            if candidate_path.exists():
-                tile_path = candidate_path
-                break
+        # Your ImageDataSet is expected to crop chips + write bbox labels
+        dataset.split_tiff_to_tiles(tile_path, gdf_tree)
 
-        if tile_path is None:
+    logger.info("✅ Detection dataset written to: %s", output_dir_p)
+
+
+# -----------------------------
+# 2) Classification patches
+# -----------------------------
+
+def make_classification_patches(
+    *,
+    tiles_gpkg: str,
+    genus_labels_gpkg: str,
+    images_dir: str,
+    output_dir: str,
+    mode: str,
+    patch_size: int = 128,
+    tile_id_col: str = "tile_id",     # or "dop_kachel" in tiles
+    class_col: str = "training_class",
+    id_col: str = "uuid",
+) -> None:
+    """
+    Extract patches around labeled trees.
+
+    - genus_labels_gpkg: must contain geometry + class_col (+ id_col optional)
+    - tiles_gpkg: tile polygons with tile_id_col or dop_kachel
+    """
+    images_dir_p = Path(images_dir)
+    output_dir_p = Path(output_dir) / f"patches_{mode}_{patch_size}"
+    output_dir_p.mkdir(parents=True, exist_ok=True)
+
+    gdf_tiles = gpd.read_file(tiles_gpkg)
+    gdf_tree = gpd.read_file(genus_labels_gpkg)
+
+    if gdf_tiles.empty:
+        raise ValueError(f"No tiles found in {tiles_gpkg}")
+    if gdf_tree.empty:
+        raise ValueError(f"No genus labels found in {genus_labels_gpkg}")
+    if class_col not in gdf_tree.columns:
+        raise ValueError(f"genus_labels_gpkg is missing class column '{class_col}'")
+
+    gdf_tiles, gdf_tree = ensure_same_crs(gdf_tiles, gdf_tree)
+
+    # Ensure we have tile_id usable for filenames
+    if tile_id_col not in gdf_tiles.columns:
+        if "dop_kachel" in gdf_tiles.columns:
+            gdf_tiles[tile_id_col] = gdf_tiles["dop_kachel"].astype(str).apply(dopkachel_to_tile_id)
+        else:
+            raise ValueError(f"Tiles file must contain '{tile_id_col}' or 'dop_kachel'.")
+
+    # Use centroids for polygons; points stay points
+    gdf_tree = gdf_tree.copy()
+    gdf_tree["__pt__"] = gdf_tree.geometry.centroid
+
+    half = int(patch_size // 2)
+
+    # Spatial join points to tiles once (fast)
+    pts = gpd.GeoDataFrame(gdf_tree[[class_col] + ([id_col] if id_col in gdf_tree.columns else [])].copy(),
+                           geometry=gdf_tree["__pt__"], crs=gdf_tree.crs)
+    joined = gpd.sjoin(pts, gdf_tiles[[tile_id_col, "geometry"]], how="left", predicate="within")
+
+    missing = joined[tile_id_col].isna().sum()
+    if missing > 0:
+        logger.info("Points not matched to any tile: %d (they will be skipped)", int(missing))
+
+    for idx, row in tqdm(joined.iterrows(), total=len(joined), desc="Classification patches"):
+        tile_id = row.get(tile_id_col, None)
+        if tile_id is None or (isinstance(tile_id, float) and tile_id != tile_id):
+            continue
+
+        class_name = str(row.get(class_col, "unknown")).strip().replace(" ", "_")
+        out_id = row.get(id_col, idx) if id_col in row else idx
+
+        tile_path = find_tile_raster(images_dir_p, mode, str(tile_id))
+        if not tile_path.exists():
+            continue
+
+        class_dir = output_dir_p / class_name
+        class_dir.mkdir(parents=True, exist_ok=True)
+
+        patch_path = class_dir / f"{out_id}.tif"
+        if patch_path.exists():
+            continue
+
+        pt = row.geometry
+        if pt is None or pt.is_empty:
             continue
 
         try:
-            class_dir = output_dir / str(class_name)
-            class_dir.mkdir(parents=True, exist_ok=True)
-            patch_path = class_dir / f"{output_id}.tif"
-            if patch_path.exists():
-                logger.info(f"Patch {patch_path} already exists, skipping.")
-                continue
-            else:
-                with rasterio.open(tile_path) as src:
-                    row, col = src.index(centroid.x, centroid.y)
-                    window = Window(col - half_size, row - half_size, patch_size, patch_size)
+            with rasterio.open(tile_path) as src:
+                r, c = src.index(pt.x, pt.y)
 
-                    if window.col_off < 0 or window.row_off < 0:
-                        continue
-                    if (window.col_off + window.width > src.width) or (window.row_off + window.height > src.height):
-                        continue
+                win = Window(c - half, r - half, patch_size, patch_size)
 
-                    patch = src.read(window=window)
-                    transform = src.window_transform(window)
-                    meta = src.meta.copy()
-                    meta.update({
-                        "height": patch.shape[1],
-                        "width": patch.shape[2],
-                        "transform": transform
-                    })
+                # bounds check
+                if win.col_off < 0 or win.row_off < 0:
+                    continue
+                if (win.col_off + win.width > src.width) or (win.row_off + win.height > src.height):
+                    continue
 
-                    with rasterio.open(patch_path, 'w', **meta) as dst:
-                        dst.write(patch)
-                    logger.info(f"SAVED to {patch_path}")
+                patch = src.read(window=win)
+                transform = src.window_transform(win)
+                meta = src.meta.copy()
+                meta.update(height=patch.shape[1], width=patch.shape[2], transform=transform)
+
+                with rasterio.open(patch_path, "w", **meta) as dst:
+                    dst.write(patch)
 
         except Exception as e:
-            logger.warning(f"Failed to create patch for tree {output_id}: {e}")
-# -------------------------
+            logger.warning("Failed patch %s from tile %s: %s", out_id, tile_path.name, e)
+
+    logger.info("✅ Classification patches written to: %s", output_dir_p)
+
+
+# -----------------------------
 # CLI
-# -------------------------
-def main():
+# -----------------------------
+
+def main() -> None:
     import argparse
-    ap = argparse.ArgumentParser(
-        description="Generate training datasets (detection tiles/labels + classification patches)")
+
+    ap = argparse.ArgumentParser(description="Generate training datasets: YOLO detection + classification patches.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    ap_det = sub.add_parser("det", help="Generate YOLO detection dataset from weak bboxes")
+    # Detection
+    ap_det = sub.add_parser("det", help="Generate YOLO detection dataset from weak bbox labels")
     ap_det.add_argument("--tiles-gpkg", required=True)
     ap_det.add_argument("--weak-bboxes-gpkg", required=True)
-    ap_det.add_argument("--images-dir", required=True, help="Directory that contains merged/ with tiles")
+    ap_det.add_argument("--images-dir", required=True, help="Directory containing merged/ tiles")
     ap_det.add_argument("--output-dir", required=True)
-    ap_det.add_argument("--mode", required=True, help="Prefix in filenames, e.g. rgbih")
-    ap_det.add_argument("--tile-id-col", default="tile_id")
+    ap_det.add_argument("--mode", required=True, help="Tile prefix in filenames, e.g. rgbih, rgbi, rgb")
+    ap_det.add_argument("--tile-id-col", default="tile_id", help="Tile id column in tiles/bboxes gpkg (fallback)")
     ap_det.add_argument("--size", type=int, default=640)
     ap_det.add_argument("--overlap", type=float, default=0.0)
 
+    # Classification
     ap_cls = sub.add_parser("patches", help="Generate classification patches from genus labels")
     ap_cls.add_argument("--tiles-gpkg", required=True)
     ap_cls.add_argument("--genus-labels-gpkg", required=True)
-    ap_cls.add_argument("--images-dir", required=True, help="Directory that contains merged/ with tiles")
+    ap_cls.add_argument("--images-dir", required=True, help="Directory containing merged/ tiles")
     ap_cls.add_argument("--output-dir", required=True)
-    ap_cls.add_argument("--mode", required=True, help="Prefix in filenames, e.g. rgbih")
+    ap_cls.add_argument("--mode", required=True, help="Tile prefix in filenames, e.g. rgbih, rgbi, rgb")
     ap_cls.add_argument("--patch-size", type=int, default=128)
-    ap_cls.add_argument("--tile-id-col", default="dop_kachel")
+    ap_cls.add_argument("--tile-id-col", default="tile_id", help="Column in tiles.gpkg or derived from dop_kachel")
     ap_cls.add_argument("--class-col", default="training_class")
     ap_cls.add_argument("--id-col", default="uuid")
 
