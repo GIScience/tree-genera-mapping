@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-generate_training_dataset.py
+generate_train_dataset.py
 
 Generate training data for two model types:
 
@@ -162,7 +162,6 @@ def make_detection_dataset(
 # -----------------------------
 # 2) Classification patches
 # -----------------------------
-
 def make_classification_patches(
     *,
     tiles_gpkg: str,
