@@ -345,6 +345,39 @@ class GenusImageDataset(Dataset):
         y = int(r["class_id"])
         return x, y
 
+# ----------------------------- multimodal wrapper dataset -----------------------------
+class GenusTabularDataset(Dataset):
+    """
+    Multimodal dataset: (x_img, x_tab, y)
+
+    Wraps GenusImageDataset and reads tabular features from the same dataframe row.
+    Uses median imputation for NaNs (computed on the provided df once).
+    """
+
+    def __init__(self, base: GenusImageDataset, df: pd.DataFrame, tabular_cols: List[str]):
+        self.base = base
+        self.df = df.reset_index(drop=True)
+        self.tabular_cols = list(tabular_cols)
+
+        if not self.tabular_cols:
+            raise ValueError("tabular_cols must be non-empty")
+
+        tab = self.df[self.tabular_cols].to_numpy(dtype=np.float32)
+        self.tab_median = np.nanmedian(tab, axis=0)
+
+    def __len__(self) -> int:
+        return len(self.base)
+
+    def __getitem__(self, idx: int):
+        x_img, y = self.base[idx]
+
+        row = self.df.iloc[idx][self.tabular_cols].to_numpy(dtype=np.float32)
+        if np.isnan(row).any():
+            mask = np.isnan(row)
+            row[mask] = self.tab_median[mask]
+
+        x_tab = torch.from_numpy(row).float()
+        return x_img, x_tab, y
 
 # -----------------------------
 # Optional helper (tabular)

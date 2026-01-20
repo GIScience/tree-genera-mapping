@@ -1,31 +1,32 @@
 #!/usr/bin/env python3
 """
 genus_train.py
-Train genus classification models (image-only(default) or multimodal image+tabular (in progress)).
 
-Expected dataset layout for images:
+Train genus classification models:
+- image_only (default): ResNet classifier on 3/4/5-channel TIFF inputs
+- multimodal: image + tabular features (NDVI/canopy/etc.) via MultiModalResNet
+
+Expected dataset layout:
   <images_dir>/**/*.tif
-where class_name is inferred from the parent folder name:
+class_name inferred from parent folder:
   .../<split>/<class_name>/<tree_id>_*.tif
-and split is inferred from path parts containing "train" or "val".
-
-Inputs:
-- images_dir: folder containing train/ and val/ subfolders (recommended)
-- ndvi_csv:  optional tabular per-tree CSV for multimodal training (IN PROGRESS)
+split inferred from path parts containing "train" or "val".
+If no split folders exist, script falls back to a random stratified split.
 
 Outputs (out_dir):
 - args.json
 - train.log
+- metrics.csv
 - history.csv
 - losses.png / accuracy.png / results.png
 - confusion_epochXXX.png
 - class_report_epochXXX.csv
 - <experiment>_best.pt
 
-Model checkpoint format:
+Checkpoint format:
 {
   "model": state_dict,
-  "classes": ID_TO_CLASS,
+  "classes": {id:int -> name:str},
   "args": training args,
   "tabular_cols": list[str]
 }
@@ -46,42 +47,22 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.metrics import classification_report, confusion_matrix
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from tree_genera_mapping.dl.losses import FocalCrossEntropy
-from tree_genera_mapping.dl.plots import plot_confusion, plot_history_curves
 from tree_genera_mapping.dl.metrics import topk, compute_class_weights_invfreq, build_alpha
-from tree_genera_mapping.dl.classification.genus_dataset import GenusImageDataset, autodetect_tabular_cols
-from tree_genera_mapping.dl.classification.genus_model import (
-    build_resnet_classifier,
-    MultiModalResNet,
-)
+from tree_genera_mapping.dl.plots import plot_confusion, plot_history_curves
+from tree_genera_mapping.dl.utils import load_labels_csv
+from tree_genera_mapping.dl.classification.genus_dataset import GenusImageDataset, GenusTabularDataset, autodetect_tabular_cols
+from tree_genera_mapping.dl.classification.genus_model import build_resnet_classifier, MultiModalResNet
 
-# TensorBoard optional
 try:
     from torch.utils.tensorboard import SummaryWriter
 except Exception:
     SummaryWriter = None
 
 
-# ------------------------------- fixed 10-class mapping -------------------------------
-ID_TO_CLASS: Dict[int, str] = {
-    0: "Acer",
-    1: "Aesculus",
-    2: "Carpinus",
-    3: "Coniferous",
-    4: "Fagus",
-    5: "OtherDeciduous",
-    6: "Platanus",
-    7: "Prunus",
-    8: "Quercus",
-    9: "Tilia",
-}
-CLASS_TO_ID: Dict[str, int] = {v: k for k, v in ID_TO_CLASS.items()}
-NUM_CLASSES = 10
-
-
-# -------------------------------- logging helpers -----------------------------------
+# ----------------------------- logging -----------------------------
 def setup_logging(out_dir: Path, use_tensorboard: bool):
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,13 +97,10 @@ def log_epoch_csv(csv_w, epoch: int, time_s: float, tr, va, lr: float):
     va_loss, va_t1, va_t5 = va
     csv_w.writerow([epoch, round(time_s, 3), tr_loss, tr_t1, tr_t5, va_loss, va_t1, va_t5, lr])
 
-# -------------------------------- training loops ------------------------------------
+
+# ----------------------------- early stop -----------------------------
 class EarlyStop:
-    """
-    Early stopping on a scalar metric.
-    - monitor='val_loss' (lower is better)
-    - monitor='val_top1' (higher is better)
-    """
+    """Early stopping on val_loss (lower better) or val_top1 (higher better)."""
 
     def __init__(self, patience: int, min_delta: float, monitor: str):
         self.patience = int(patience)
@@ -150,6 +128,53 @@ class EarlyStop:
         return self.bad > self.patience
 
 
+# ----------------------------- data indexing -----------------------------
+def _infer_split_from_path(p: Path) -> str:
+    parts = {x.lower() for x in p.parts}
+    if "train" in parts:
+        return "train"
+    if "val" in parts or "valid" in parts or "validation" in parts:
+        return "val"
+    return "unknown"
+
+
+def build_image_index(images_dir: Path) -> pd.DataFrame:
+    records = []
+    for img_path in images_dir.rglob("*.tif"):
+        tree_id = img_path.stem.split("_")[0]
+        class_name = img_path.parent.name
+        split = _infer_split_from_path(img_path)
+        records.append(
+            {
+                "image_path": str(img_path),
+                "tree_id": str(tree_id),
+                "class_name": str(class_name),
+                "split": split,
+            }
+        )
+
+    df = pd.DataFrame.from_records(records)
+    if df.empty:
+        raise ValueError(f"No .tif files found under: {images_dir}")
+    return df
+
+
+def split_train_val_fallback(df: pd.DataFrame, val_frac: float, seed: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    df = df.copy().reset_index(drop=True)
+    # stratify by class_name if possible
+    if df["class_name"].nunique() > 1 and df.groupby("class_name").size().min() >= 2:
+        train_df = df.groupby("class_name", group_keys=False).apply(
+            lambda x: x.sample(frac=(1 - val_frac), random_state=seed)
+        )
+    else:
+        train_df = df.sample(frac=(1 - val_frac), random_state=seed)
+
+    val_df = df.drop(train_df.index)
+    return train_df.reset_index(drop=True), val_df.reset_index(drop=True)
+
+
+
+# ----------------------------- train / eval -----------------------------
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -231,6 +256,7 @@ def evaluate(
         loss = loss_fn(logits, y)
         n = y.size(0)
         t1, t5 = topk(logits, y, ks=(1, 5))
+
         loss_sum += float(loss.item()) * n
         top1_sum += t1 * n
         top5_sum += t5 * n
@@ -244,58 +270,12 @@ def evaluate(
     return loss_sum / N, top1_sum / N, top5_sum / N, y_true, y_pred
 
 
-# -------------------------------- data loading --------------------------------------
-def _infer_split_from_path(p: Path) -> str:
-    parts = {x.lower() for x in p.parts}
-    if "train" in parts:
-        return "train"
-    if "val" in parts or "valid" in parts or "validation" in parts:
-        return "val"
-    return "unknown"
-
-
-def build_image_index(images_dir: Path) -> pd.DataFrame:
-    """
-    Builds a dataframe with columns:
-      image_path, tree_id, class_name, split
-    Assumes class_name is parent folder of the tif file.
-    """
-    records = []
-    for img_path in images_dir.rglob("*.tif"):
-        tree_id = img_path.stem.split("_")[0]
-        class_name = img_path.parent.name
-        split = _infer_split_from_path(img_path)
-        records.append(
-            {
-                "image_path": str(img_path),
-                "tree_id": str(tree_id),
-                "class_name": str(class_name),
-                "split": split,
-            }
-        )
-    df = pd.DataFrame.from_records(records)
-    if df.empty:
-        raise ValueError(f"No .tif files found under: {images_dir}")
-    return df
-
-def split_train_val_fallback(df: pd.DataFrame, val_frac: float, seed: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Fallback if no split folders exist."""
-    df = df.copy().reset_index(drop=True)
-    if df["class_name"].nunique() > 1 and df.groupby("class_name").size().min() >= 2:
-        train_df = df.groupby("class_name", group_keys=False).apply(
-            lambda x: x.sample(frac=(1 - val_frac), random_state=seed)
-        )
-    else:
-        train_df = df.sample(frac=(1 - val_frac), random_state=seed)
-    val_df = df.drop(train_df.index)
-    return train_df.reset_index(drop=True), val_df.reset_index(drop=True)
-
-
-# --------------------------------------- main ---------------------------------------
+# ----------------------------- CLI -----------------------------
 def parse_args():
     ap = argparse.ArgumentParser(description="Train genus classification (image-only or multimodal)")
 
     ap.add_argument("--images-dir", required=True, help="Directory containing dataset images (expects train/ and val/).")
+    ap.add_argument("--labels-csv", default=None, help="CSV with class_id,class_name (default: conf/genus_labels.csv)")
     ap.add_argument("--ndvi-csv", default=None, help="Optional per-tree tabular CSV (for multimodal).")
 
     ap.add_argument("--experiment", choices=["image_only", "multimodal"], default="image_only")
@@ -306,10 +286,8 @@ def parse_args():
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--weight-decay", type=float, default=1e-2)
     ap.add_argument("--num-workers", type=int, default=8)
-
     ap.add_argument("--out-dir", required=True, help="Output directory for checkpoints and logs.")
 
-    # Backbone
     ap.add_argument(
         "--backbone",
         choices=["resnet18", "resnet34", "resnet50", "resnet101", "resnet152"],
@@ -317,26 +295,25 @@ def parse_args():
         help="Torchvision ResNet backbone name.",
     )
 
-    # Data scaling behavior
     ap.add_argument(
         "--percentile-normalize",
         action="store_true",
         help="Apply per-image percentile normalization in dataset reader (usually OFF).",
     )
 
-    # Imbalance + loss
+    # imbalance + loss
     ap.add_argument("--sampler", choices=["none", "weighted"], default="none")
-    ap.add_argument("--class-weights", choices=["off", "invfreq"], default="off", help="CrossEntropy class weights.")
+    ap.add_argument("--class-weights", choices=["off", "invfreq"], default="off")
     ap.add_argument("--loss", choices=["ce", "focal"], default="ce")
     ap.add_argument("--focal-gamma", type=float, default=1.8)
     ap.add_argument("--alpha-mode", choices=["none", "scalar", "invfreq"], default="none")
     ap.add_argument("--alpha", type=float, default=0.25)
 
-    # Split fallback (if no train/val folders)
+    # split fallback
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=42)
 
-    # Logging / early stopping
+    # logging / early stopping
     ap.add_argument("--tensorboard", action="store_true")
     ap.add_argument("--early-stop-patience", type=int, default=10)
     ap.add_argument("--early-stop-min-delta", type=float, default=0.0)
@@ -355,11 +332,38 @@ def main():
     logger, csv_f, csv_w, tb = setup_logging(out_dir, args.tensorboard)
     logger.info("Args:\n" + json.dumps(vars(args), indent=2))
 
+    # --------------------- labels ---------------------
+    if args.labels_csv is None:
+        # repo_root/.../tree_genera_mapping/dl/classification/genus_train.py -> repo_root/conf/genus_labels.csv
+        default_labels = Path(__file__).resolve().parents[3] / "conf" / "genus_labels.csv"
+        labels_csv = default_labels
+    else:
+        labels_csv = Path(args.labels_csv)
+
+    id_to_class, class_to_id = load_labels_csv(labels_csv)
+    num_classes = len(id_to_class)
+
+    # validate mapping is contiguous 0..K-1 (recommended)
+    ids_sorted = sorted(id_to_class.keys())
+    if ids_sorted != list(range(len(ids_sorted))):
+        raise ValueError(f"Labels in {labels_csv} must be contiguous 0..K-1. Got ids: {ids_sorted}")
+
+    logger.info(f"Loaded labels: K={num_classes} from {labels_csv}")
+
     # --------------------- build image index ---------------------
     images_dir = Path(args.images_dir)
     img_df = build_image_index(images_dir)
 
-    # Split logic
+    # drop unknown classes early
+    unknown = sorted(set(img_df["class_name"]) - set(class_to_id.keys()))
+    if unknown:
+        raise ValueError(
+            "Found class folders not present in labels CSV:\n"
+            + "\n".join(f"- {u}" for u in unknown)
+            + f"\nFix folder names or update {labels_csv}."
+        )
+
+    # split logic
     if set(img_df["split"].unique()) >= {"train", "val"}:
         train_df = img_df[img_df["split"] == "train"].reset_index(drop=True)
         val_df = img_df[img_df["split"] == "val"].reset_index(drop=True)
@@ -372,48 +376,52 @@ def main():
     # --------------------- tabular (optional) ---------------------
     use_tabular = args.experiment == "multimodal"
     tab_cols: List[str] = []
-    ndvi_df: Optional[pd.DataFrame] = None
 
     if use_tabular:
         if args.ndvi_csv is None:
             raise ValueError("--experiment multimodal requires --ndvi-csv")
-        ndvi_df = pd.read_csv(args.ndvi_csv)
 
+        ndvi_df = pd.read_csv(args.ndvi_csv)
         if "tree_id" not in ndvi_df.columns:
             raise ValueError("ndvi_csv must contain 'tree_id' column")
 
         tab_cols = autodetect_tabular_cols(ndvi_df)
-        if len(tab_cols) == 0:
-            raise ValueError("Could not autodetect tabular columns in ndvi_csv.")
+        if not tab_cols:
+            raise ValueError("Could not autodetect tabular columns in ndvi_csv")
 
-        # Merge tabular into train/val
-        train_df = train_df.merge(ndvi_df, on="tree_id", how="left", suffixes=("", "_tab"))
-        val_df = val_df.merge(ndvi_df, on="tree_id", how="left", suffixes=("", "_tab"))
-
+        train_df = train_df.merge(ndvi_df, on="tree_id", how="left")
+        val_df = val_df.merge(ndvi_df, on="tree_id", how="left")
         logger.info(f"Multimodal enabled. Tabular cols: {tab_cols}")
 
-    # --------------------- datasets / loaders ---------------------
-    train_set = GenusImageDataset(
+    # --------------------- datasets ---------------------
+    train_base = GenusImageDataset(
         train_df,
         img_size=args.img_size,
         augment=True,
         in_channels=args.in_channels,
-        class_to_id=CLASS_TO_ID,
+        class_to_id=class_to_id,
         percentile_normalize=args.percentile_normalize,
     )
-    val_set = GenusImageDataset(
+    val_base = GenusImageDataset(
         val_df,
         img_size=args.img_size,
         augment=False,
         in_channels=args.in_channels,
-        class_to_id=CLASS_TO_ID,
+        class_to_id=class_to_id,
         percentile_normalize=args.percentile_normalize,
     )
 
-    # Weighted sampler (optional)
+    if use_tabular:
+        train_set = GenusTabularDataset(train_base, train_df, tabular_cols=tab_cols)
+        val_set = GenusTabularDataset(val_base, val_df, tabular_cols=tab_cols)
+    else:
+        train_set = train_base
+        val_set = val_base
+
+    # --------------------- loaders ---------------------
     if args.sampler == "weighted":
-        y_train = train_df["class_name"].map(CLASS_TO_ID).to_numpy()
-        class_counts = np.bincount(y_train, minlength=NUM_CLASSES)
+        y_train = train_df["class_name"].map(class_to_id).to_numpy()
+        class_counts = np.bincount(y_train, minlength=num_classes)
         class_weights = 1.0 / np.maximum(class_counts, 1)
         sample_weights = class_weights[y_train]
         sampler = WeightedRandomSampler(
@@ -448,17 +456,16 @@ def main():
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     if use_tabular:
-        tab_dim = len(tab_cols)
         model = MultiModalResNet(
             backbone=args.backbone,
-            num_classes=NUM_CLASSES,
-            tabular_dim=tab_dim,
+            num_classes=num_classes,
+            tabular_dim=len(tab_cols),
             pretrained=True,
         )
     else:
         model = build_resnet_classifier(
             model_name=args.backbone,
-            num_classes=NUM_CLASSES,
+            num_classes=num_classes,
             in_channels=args.in_channels,
             pretrained=True,
             extra_channel_init="copy",
@@ -468,18 +475,19 @@ def main():
     logger.info(f"Device: {device} | AMP: {use_amp} | Model: {args.backbone} | in_channels={args.in_channels}")
 
     # --------------------- loss ---------------------
-    y_train_ids = train_df["class_name"].map(CLASS_TO_ID).to_numpy()
+    y_train_ids = train_df["class_name"].map(class_to_id).to_numpy()
 
     if args.loss == "ce":
         if args.class_weights == "invfreq":
-            w = compute_class_weights_invfreq(y_train_ids, num_classes=NUM_CLASSES).to(device)
+            w = compute_class_weights_invfreq(y_train_ids, num_classes=num_classes).to(device)
             loss_fn = nn.CrossEntropyLoss(weight=w, label_smoothing=0.05)
             logger.info("Loss: CrossEntropy (invfreq weights ON)")
         else:
             loss_fn = nn.CrossEntropyLoss(label_smoothing=0.05)
             logger.info("Loss: CrossEntropy")
     else:
-        alpha_vec = build_alpha(args.alpha_mode, y_train_ids, args.alpha, num_classes=NUM_CLASSES)
+        # NOTE: if your build_alpha signature differs, adjust this line accordingly.
+        alpha_vec = build_alpha(args.alpha_mode, y_train_ids, args.alpha, num_classes=num_classes)
         loss_fn = FocalCrossEntropy(gamma=args.focal_gamma, alpha=alpha_vec, reduction="mean")
         logger.info(f"Loss: Focal (gamma={args.focal_gamma}, alpha_mode={args.alpha_mode})")
 
@@ -490,11 +498,7 @@ def main():
 
     # --------------------- training loop ---------------------
     ckpt_path = out_dir / f"{args.experiment}_best.pt"
-    es = EarlyStop(
-        patience=args.early_stop_patience,
-        min_delta=args.early_stop_min_delta,
-        monitor=args.early_stop_monitor,
-    )
+    es = EarlyStop(args.early_stop_patience, args.early_stop_min_delta, args.early_stop_monitor)
 
     history: List[dict] = []
     best_state = None
@@ -508,7 +512,7 @@ def main():
             tr = train_one_epoch(model, train_loader, optimizer, loss_fn, device, scaler, use_amp)
             va = evaluate(model, val_loader, loss_fn, device)
 
-            # scheduler step per-iteration-equivalent (your old behavior)
+            # keep your old behavior: scheduler step "per-iteration-equivalent"
             for _ in range(len(train_loader)):
                 scheduler.step()
 
@@ -517,22 +521,21 @@ def main():
 
             tr_loss, tr_t1, tr_t5 = tr
             va_loss, va_t1, va_t5, y_true, y_pred = va
-
             lr = float(optimizer.param_groups[0]["lr"])
             best_top1 = max(best_top1, va_t1)
 
             history.append(
-                {
-                    "epoch": epoch,
-                    "train_loss": tr_loss,
-                    "train_top1": tr_t1,
-                    "train_top5": tr_t5,
-                    "val_loss": va_loss,
-                    "val_top1": va_t1,
-                    "val_top5": va_t5,
-                    "time_s": dt,
-                    "lr": lr,
-                }
+                dict(
+                    epoch=epoch,
+                    train_loss=tr_loss,
+                    train_top1=tr_t1,
+                    train_top5=tr_t5,
+                    val_loss=va_loss,
+                    val_top1=va_t1,
+                    val_top5=va_t5,
+                    time_s=dt,
+                    lr=lr,
+                )
             )
             pd.DataFrame(history).to_csv(out_dir / "history.csv", index=False)
 
@@ -545,7 +548,6 @@ def main():
 
             log_epoch_csv(csv_w, epoch, time_cum, tr, (va_loss, va_t1, va_t5), lr)
 
-            # TensorBoard
             if tb is not None:
                 tb.add_scalar("loss/train", tr_loss, epoch)
                 tb.add_scalar("loss/val", va_loss, epoch)
@@ -555,7 +557,6 @@ def main():
                 tb.add_scalar("acc_top5/val", va_t5, epoch)
                 tb.add_scalar("lr", lr, epoch)
 
-            # Save best according to monitor
             monitored_value = va_loss if es.monitor == "val_loss" else va_t1
             is_better = (
                 es.best is None
@@ -566,28 +567,28 @@ def main():
             if is_better:
                 best_state = {
                     "model": model.state_dict(),
-                    "classes": ID_TO_CLASS,
+                    "classes": id_to_class,
                     "args": vars(args),
                     "tabular_cols": tab_cols,
                 }
                 torch.save(best_state, ckpt_path)
 
-            # Per-epoch reports
+            # per-epoch reports
             if y_true.size and y_pred.size:
                 report = classification_report(
                     y_true,
                     y_pred,
-                    labels=list(range(NUM_CLASSES)),
-                    target_names=[ID_TO_CLASS[i] for i in range(NUM_CLASSES)],
+                    labels=list(range(num_classes)),
+                    target_names=[id_to_class[i] for i in range(num_classes)],
                     digits=3,
                     zero_division=0,
                     output_dict=True,
                 )
                 (out_dir / f"class_report_epoch{epoch:03d}.csv").write_text(pd.DataFrame(report).to_csv(index=True))
-                cm = confusion_matrix(y_true, y_pred, labels=list(range(NUM_CLASSES)))
-                plot_confusion(cm, ID_TO_CLASS, out_dir / f"confusion_epoch{epoch:03d}.png")
 
-            # Early stop check (after exports)
+                cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
+                plot_confusion(cm, id_to_class, out_dir / f"confusion_epoch{epoch:03d}.png")
+
             if es.step(monitored_value):
                 logger.info(f"Early stopping at epoch {epoch} (monitor={es.monitor}, best={es.best:.4f}).")
                 break
@@ -596,7 +597,6 @@ def main():
         logger.error(f"Training failed: {e}", exc_info=True)
 
     finally:
-        # Restore best weights for final plots
         if best_state is None and ckpt_path.exists():
             best_state = torch.load(ckpt_path, map_location="cpu")
 
