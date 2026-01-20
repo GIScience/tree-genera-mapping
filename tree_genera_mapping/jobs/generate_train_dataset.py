@@ -34,7 +34,7 @@ import rasterio
 from rasterio.windows import Window
 from tqdm import tqdm
 
-from tree_genera_mapping.preprocess.dataset import ImageDataSet
+from tree_genera_mapping.preprocess.detection_dataset import ImageDataSet
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

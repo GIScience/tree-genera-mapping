@@ -53,12 +53,7 @@ class ImageDataSet:
         # counts all matching tif files under img_dir
         tif_files = list(self.img_dir.glob(f'**/{self.mode}_*.tif'))
         return len(tif_files)
-    # def get_class_dir(self, class_name: str):
-    #     if class_name not in self.class_dirs:
-    #         class_dir = self.output_dir / 'train' / class_name
-    #         class_dir.mkdir(parents=True, exist_ok=True)
-    #         self.class_dirs[class_name] = class_dir
-    #     return self.class_dirs[class_name]
+
     def split_tiff_to_tiles(self,
                             image_path:str | Path,
                             trees_gdf:gpd.GeoDataFrame,

@@ -3,7 +3,7 @@ from pathlib import Path
 from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 
-from tree_genera_mapping.train.teacher_tree_train import (
+from tree_genera_mapping.dl.classification.weak_tree_train import (
     FiveBandImageDataset, autodetect_tabular_cols,
     make_resnet_5ch, MultiModalResNet, ID_TO_CLASS, NUM_CLASSES
 )
@@ -26,7 +26,7 @@ def plot_cm(cm, classes, out_png):
                     color="white" if row[i,j] > 0.6 else "black", fontsize=9)
     fig.tight_layout(); fig.savefig(out_png, dpi=220); plt.close(fig)
 
-def main():
+def eval():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--images_dir", required=True)
@@ -63,7 +63,7 @@ def main():
     else:
         merged = df  # image-only
 
-    from tree_genera_mapping.train.teacher_tree_train import ResizeCH, GeometricAugmentCH, PhotometricAugmentCH, NormalizeCH, read_5band_tiff
+    # from tree_genera_mapping.dl.detection.weak_tree_train import  ResizeCH, GeometricAugmentCH, PhotometricAugmentCH, NormalizeCH, read_5band_tiff
     # Reuse dataset class from training file
     val_set = FiveBandImageDataset(merged, img_size=args.img_size, augment=False,
                                    use_tabular=(args.experiment=="multimodal"),
@@ -106,4 +106,4 @@ def main():
     print(f"Saved: {out_dir/'confusion_best_val.png'}")
 
 if __name__ == "__main__":
-    main()
+    eval()
