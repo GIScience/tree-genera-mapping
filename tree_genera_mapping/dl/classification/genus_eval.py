@@ -1,109 +1,167 @@
-import os, json, torch, numpy as np, pandas as pd
-from pathlib import Path
-from sklearn.metrics import classification_report, confusion_matrix
-import matplotlib.pyplot as plt
+"""
+genus_eval.py
 
-from tree_genera_mapping.dl.classification.weak_tree_train import (
-    FiveBandImageDataset, autodetect_tabular_cols,
-    make_resnet_5ch, MultiModalResNet, ID_TO_CLASS, NUM_CLASSES
-)
+Evaluate genus classification checkpoint on VAL split.
+
+- Uses conf/genera_labels.csv as source of truth for class mapping.
+- Expects images_dir to contain split folders (train/val) and class folders:
+    <images_dir>/val/<class_name>/*.tif
+
+Outputs (in out_dir):
+- classification_report.csv
+- confusion_best_val.png
+"""
+
+from __future__ import annotations
+
 import argparse
+from pathlib import Path
+from typing import Dict, List, Tuple
 
-def plot_cm(cm, classes, out_png):
-    cm = np.asarray(cm, dtype=np.float64)
-    row = cm / cm.sum(axis=1, keepdims=True)
-    row[np.isnan(row)] = 0
-    fig, ax = plt.subplots(figsize=(9,9))
-    im = ax.imshow(row, cmap='Blues', interpolation='nearest')
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    ax.set_xticks(range(len(classes))); ax.set_yticks(range(len(classes)))
-    ax.set_xticklabels(classes, rotation=45, ha="right")
-    ax.set_yticklabels(classes)
-    ax.set_xlabel("Predicted"); ax.set_ylabel("True"); ax.set_title("Confusion Matrix")
-    for i in range(len(classes)):
-        for j in range(len(classes)):
-            ax.text(j,i, f"{int(cm[i,j])}\n{row[i,j]*100:.1f}%", ha="center", va="center",
-                    color="white" if row[i,j] > 0.6 else "black", fontsize=9)
-    fig.tight_layout(); fig.savefig(out_png, dpi=220); plt.close(fig)
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.metrics import classification_report, confusion_matrix
+from torch.utils.data import DataLoader
 
-def eval():
+from tree_genera_mapping.dl.plots import plot_confusion
+from tree_genera_mapping.dl.utils import load_labels_csv
+from tree_genera_mapping.dl.classification.genus_dataset import GenusImageDataset
+from tree_genera_mapping.dl.classification.genus_model import build_resnet_classifier
+
+# ------------------------- data collection -------------------------
+def collect_val_images(images_dir: Path) -> pd.DataFrame:
+    """
+    Build dataframe for VAL split:
+      image_path, class_name
+
+    Assumes folder layout: .../val/<class_name>/*.tif
+    """
+    records = []
+    for p in images_dir.rglob("*.tif"):
+        if "val" not in p.parts:
+            continue
+        class_name = p.parent.name
+        records.append({"image_path": str(p), "class_name": class_name})
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        raise ValueError(f"No VAL .tif files found under: {images_dir}")
+    return df
+
+
+@torch.no_grad()
+def predict(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
+    model.eval()
+    y_true: List[np.ndarray] = []
+    y_pred: List[np.ndarray] = []
+
+    for x, y in loader:
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+
+        logits = model(x)
+        y_true.append(y.cpu().numpy())
+        y_pred.append(logits.argmax(1).cpu().numpy())
+
+    return np.concatenate(y_true), np.concatenate(y_pred)
+
+
+def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out_dir", required=True)
-    ap.add_argument("--images_dir", required=True)
-    ap.add_argument("--ndvi_csv", required=True)
-    ap.add_argument("--experiment", choices=["image_only","multimodal"], default="image_only")
-    ap.add_argument("--backbone", choices=["resnet34","resnet50","resnet101"], default="resnet50")
+    ap.add_argument("--out_dir", required=True, help="Run directory that contains <experiment>_best.pt")
+    ap.add_argument("--images_dir", required=True, help="Dataset root (expects val/<class_name>/*.tif)")
+    ap.add_argument("--labels_csv", default="conf/genera_labels.csv", help="Label mapping CSV")
+
+    ap.add_argument("--experiment", choices=["image_only", "multimodal"], default="image_only")
+    ap.add_argument("--backbone", choices=["resnet18", "resnet34", "resnet50", "resnet101", "resnet152"], default="resnet50")
+
     ap.add_argument("--img_size", type=int, default=224)
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--num_workers", type=int, default=8)
+
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
+    images_dir = Path(args.images_dir)
+    labels_csv = Path(args.labels_csv)
+
     ckpt_path = out_dir / f"{args.experiment}_best.pt"
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    id_to_class, class_to_id = load_labels_csv(labels_csv)
+    num_classes = len(id_to_class)
+
+    # load checkpoint
     ckpt = torch.load(ckpt_path, map_location="cpu")
-    classes = ckpt.get("classes", ID_TO_CLASS)
-    tabular_cols = ckpt.get("tabular_cols", [])
 
-    # Build datasets (VAL split only)
-    # expects your folder structure where split is encoded in path
-    img_dir = Path(args.images_dir)
-    img_records = []
-    for p in img_dir.rglob("*.tif"):
-        split = "val" if "val" in p.parts else ("train" if "train" in p.parts else "unknown")
-        if split != "val": continue
-        class_name = p.parts[-2]
-        img_records.append({"image_path": str(p), "class_name": class_name, "split": split})
-    df = pd.DataFrame(img_records)
-    df["class_id"] = df["class_name"].map({v:k for k,v in classes.items()}).astype(int)
+    # build VAL dataframe
+    val_df = collect_val_images(images_dir)
+    val_df["class_id"] = val_df["class_name"].map(class_to_id)
 
-    ndvi_df = pd.read_csv(args.ndvi_csv)
-    # keep only columns that exist
-    if "tree_id" in df.columns and "tree_id" in ndvi_df.columns:
-        merged = df.merge(ndvi_df, on=["tree_id","class_name"], how="left")
-    else:
-        merged = df  # image-only
+    if val_df["class_id"].isna().any():
+        missing = val_df[val_df["class_id"].isna()]["class_name"].value_counts()
+        raise ValueError(
+            "Some class folders are not present in labels CSV:\n" + missing.to_string()
+        )
+    val_df["class_id"] = val_df["class_id"].astype(int)
 
-    # from tree_genera_mapping.dl.detection.weak_tree_train import  ResizeCH, GeometricAugmentCH, PhotometricAugmentCH, NormalizeCH, read_5band_tiff
-    # Reuse dataset class from training file
-    val_set = FiveBandImageDataset(merged, img_size=args.img_size, augment=False,
-                                   use_tabular=(args.experiment=="multimodal"),
-                                   tabular_cols=tabular_cols)
+    # dataset / loader (image-only dataset API)
+    val_set = GenusImageDataset(
+        val_df,
+        img_size=args.img_size,
+        augment=False,
+        class_to_id=class_to_id,
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+    )
 
-    from torch.utils.data import DataLoader
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
-
-    # Build model and load weights
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if args.experiment == "multimodal":
-        model = MultiModalResNet(args.backbone, len(classes), tabular_dim=len(tabular_cols))
-    else:
-        model = make_resnet_5ch(args.backbone, len(classes))
+    # model (image_only uses 5ch input as per dataset)
+    model = build_resnet_classifier(
+        model_name=args.backbone,
+        num_classes=num_classes,
+        in_channels=5,
+        pretrained=False,  # weights come from checkpoint
+    )
     model.load_state_dict(ckpt["model"])
-    model.to(device).eval()
 
-    y_true=[]; y_pred=[]
-    import torch.nn.functional as F
-    with torch.no_grad():
-        for batch in val_loader:
-            if len(batch)==3:
-                xi, xt, y = [b.to(device, non_blocking=True) for b in batch]
-                out = model(xi, xt)
-            else:
-                xi, y = [b.to(device, non_blocking=True) for b in batch]
-                out = model(xi)
-            y_true.append(y.cpu().numpy())
-            y_pred.append(out.argmax(1).cpu().numpy())
-    y_true = np.concatenate(y_true); y_pred = np.concatenate(y_pred)
-    print("Classification report:")
-    print(pd.DataFrame.from_dict(
-        classification_report(y_true, y_pred,
-                              target_names=[classes[i] for i in range(len(classes))],
-                              zero_division=0, output_dict=True)
-    ))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
 
-    cm = confusion_matrix(y_true, y_pred, labels=list(range(len(classes))))
-    plot_cm(cm, [classes[i] for i in range(len(classes))], out_png=str(out_dir / "confusion_best_val.png"))
-    print(f"Saved: {out_dir/'confusion_best_val.png'}")
+    # predict
+    y_true, y_pred = predict(model, val_loader, device=device)
+
+    # report
+    class_names = [id_to_class[i] for i in sorted(id_to_class.keys())]
+    report = classification_report(
+        y_true,
+        y_pred,
+        labels=list(range(num_classes)),
+        target_names=class_names,
+        zero_division=0,
+        output_dict=True,
+    )
+    report_df = pd.DataFrame(report).T
+    report_csv = out_dir / "classification_report.csv"
+    report_df.to_csv(report_csv, index=True)
+
+    # confusion + plot (use your dl/plots.py)
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
+    cm_png = out_dir / "confusion_best_val.png"
+    plot_confusion(cm, classes=id_to_class, out_png=cm_png, normalize=True)
+
+    acc = float((y_true == y_pred).mean()) if len(y_true) else float("nan")
+    print(f"Checkpoint: {ckpt_path}")
+    print(f"VAL samples: {len(y_true)} | Accuracy: {acc:.4f}")
+    print(f"Saved: {report_csv}")
+    print(f"Saved: {cm_png}")
+
 
 if __name__ == "__main__":
-    eval()
+    main()
