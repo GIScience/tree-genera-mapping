@@ -46,7 +46,7 @@ python preprocess/prepare_genus_labels.py --trees /path/to/GreeHill_dataset.gpkg
 3.1. detection (YOLO images + txt labels)
 - **NOTE: HUMAN-IN-THE-LOOP CURATION** of tree labels before running generation of training labels. QGIS can be used to visualize and edit the generated weak tree bounding boxes.  
 ```bash
- python preprocess/generate_training_dataset.py det \
+ python preprocess/generate_train_dataset.py det \
   --tiles-gpkg data/tiles.gpkg \
   --weak-bboxes-gpkg outputs/tree_bboxes_merged.gpkg \
   --images-dir /data/tiles/merged \
@@ -58,7 +58,7 @@ python preprocess/prepare_genus_labels.py --trees /path/to/GreeHill_dataset.gpkg
 - this is an image with 5-channels (RGB + IR + Height) and corresponding genus labels for each tree/patch.
 - Size is uniform for all patches (e.g., 128x128px) 
 ```bash
-python preprocess/generate_training_dataset.py patches \
+python preprocess/generate_train_dataset.py patches \
   --tiles-gpkg data/tiles.gpkg \
   --genus-labels-gpkg data/tree_labels.gpkg \
   --images-dir /data/tiles/merged \
