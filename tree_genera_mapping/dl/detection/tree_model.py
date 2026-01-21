@@ -2,9 +2,10 @@
 tree_model.py
 
 Model factory for tree crown detection.
+
 Supports:
 - Faster R-CNN (torchvision) with ResNet-FPN backbones: resnet50, resnet101, resnet152
-- DETR (HuggingFace transformers) with ResNet-50 backbone
+- DETR (HuggingFace transformers) with ResNet-50 backbone (optional)
 
 Multi-channel input:
 - Works with 3, 4, 5 (or N>=3) channel tensors
@@ -23,6 +24,7 @@ Original Papers:
 - Faster R-CNN: https://arxiv.org/abs/1506.01497
 - DETR: https://arxiv.org/abs/2005.12872
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -53,6 +55,41 @@ class NormalizeConfig:
     max_size: int = 1333
 
 
+# ---------------------------------------------------------------------
+# Conv1 expansion (moved from weak_tree_train.py)
+# ---------------------------------------------------------------------
+def modify_resnet_input_channels(model: FasterRCNN, in_channels: int = 5) -> FasterRCNN:
+    """
+    Backwards-compatible helper (used in your older training code):
+    modifies torchvision FasterRCNN backbone conv1 to accept in_channels.
+
+    Behavior:
+    - copy pretrained RGB weights into first 3 channels
+    - init extra channels with mean of RGB weights
+    """
+    if in_channels < 3:
+        raise ValueError("in_channels must be >= 3")
+
+    old_conv: nn.Conv2d = model.backbone.body.conv1
+    new_conv = nn.Conv2d(
+        in_channels=in_channels,
+        out_channels=old_conv.out_channels,
+        kernel_size=old_conv.kernel_size,
+        stride=old_conv.stride,
+        padding=old_conv.padding,
+        bias=False,
+    )
+
+    with torch.no_grad():
+        new_conv.weight[:, :3] = old_conv.weight[:, :3]
+        if in_channels > 3:
+            mean_rgb = old_conv.weight[:, :3].mean(dim=1, keepdim=True)  # [out,1,k,k]
+            new_conv.weight[:, 3:] = mean_rgb.repeat(1, in_channels - 3, 1, 1)
+
+    model.backbone.body.conv1 = new_conv
+    return model
+
+
 def _expand_conv_in_channels(conv: nn.Conv2d, in_channels: int) -> nn.Conv2d:
     """
     Create a new conv with in_channels, copying pretrained weights:
@@ -75,14 +112,10 @@ def _expand_conv_in_channels(conv: nn.Conv2d, in_channels: int) -> nn.Conv2d:
     )
 
     with torch.no_grad():
-        # copy RGB
         new_conv.weight[:, :3] = conv.weight[:, :3]
-
-        # init extra channels
         if in_channels > 3:
-            extra = in_channels - 3
-            mean_rgb = conv.weight[:, :3].mean(dim=1, keepdim=True)  # [out,1,k,k]
-            new_conv.weight[:, 3:] = mean_rgb.repeat(1, extra, 1, 1)
+            mean_rgb = conv.weight[:, :3].mean(dim=1, keepdim=True)
+            new_conv.weight[:, 3:] = mean_rgb.repeat(1, in_channels - 3, 1, 1)
 
         if conv.bias is not None:
             new_conv.bias.copy_(conv.bias)
@@ -91,7 +124,7 @@ def _expand_conv_in_channels(conv: nn.Conv2d, in_channels: int) -> nn.Conv2d:
 
 
 def _default_norm(in_channels: int) -> NormalizeConfig:
-    # Safe placeholder defaults (you can override from CLI).
+    # matches your weak_tree_train.py defaults
     return NormalizeConfig(
         mean=[0.5] * in_channels,
         std=[0.25] * in_channels,
@@ -100,6 +133,9 @@ def _default_norm(in_channels: int) -> NormalizeConfig:
     )
 
 
+# ---------------------------------------------------------------------
+# Faster R-CNN (canonical factory)
+# ---------------------------------------------------------------------
 def get_faster_rcnn(
     *,
     num_classes: int,
@@ -110,18 +146,17 @@ def get_faster_rcnn(
 ) -> FasterRCNN:
     """
     Build Faster R-CNN with ResNet-FPN backbone.
-    num_classes includes background class? (torchvision expects num_classes INCLUDING background)
-    Usually: num_classes = 2 for {background, tree}.
+
+    IMPORTANT: torchvision FasterRCNN expects num_classes INCLUDING background.
+    Typical: num_classes=2 for {background, tree}.
     """
     backbone = resnet_fpn_backbone(backbone_name, pretrained=pretrained_backbone)
 
-    # Modify backbone conv1 BEFORE passing into FasterRCNN (less fragile)
-    # backbone.body is a ResNet
+    # Expand conv1 on ResNet backbone (cleaner than patching after model creation)
     backbone.body.conv1 = _expand_conv_in_channels(backbone.body.conv1, in_channels)
 
     model = FasterRCNN(backbone, num_classes=num_classes)
 
-    # Normalize config
     if norm is None:
         norm = _default_norm(in_channels)
 
@@ -131,10 +166,44 @@ def get_faster_rcnn(
         image_mean=norm.mean,
         image_std=norm.std,
     )
-
     return model
 
 
+# ---------------------------------------------------------------------
+# Backwards-compatible alias (moved from weak_tree_train.py)
+# ---------------------------------------------------------------------
+def get_faster_rcnn_5ch(
+    num_classes: int,
+    in_channels: int = 5,
+    backbone_name: BackboneName = "resnet50",
+    pretrained_backbone: bool = True,
+    image_mean: Optional[List[float]] = None,
+    image_std: Optional[List[float]] = None,
+    min_size: int = 800,
+    max_size: int = 1333,
+) -> FasterRCNN:
+    """
+    Compatibility wrapper for your old training script.
+    Prefer get_faster_rcnn() in new code.
+    """
+    norm = NormalizeConfig(
+        mean=image_mean if image_mean is not None else [0.5] * in_channels,
+        std=image_std if image_std is not None else [0.25] * in_channels,
+        min_size=min_size,
+        max_size=max_size,
+    )
+    return get_faster_rcnn(
+        num_classes=num_classes,
+        in_channels=in_channels,
+        backbone_name=backbone_name,
+        pretrained_backbone=pretrained_backbone,
+        norm=norm,
+    )
+
+
+# ---------------------------------------------------------------------
+# DETR (optional)
+# ---------------------------------------------------------------------
 def get_detr(
     *,
     num_classes: int,
@@ -143,22 +212,18 @@ def get_detr(
 ) -> nn.Module:
     """
     Build DETR from transformers with expanded input channels.
-    Requires `transformers` installed.
 
-    For DETR, num_classes should be the number of object classes (not including "no object"),
-    but HuggingFace DETR heads often include an extra background internally.
-    We'll just set classifier output to num_classes.
+    For HF DETR: num_classes is number of object classes (not including 'no object'),
+    but HF heads manage background internally. We set the classifier to num_classes.
     """
     if DetrForObjectDetection is None:
         raise ImportError("transformers is not installed; cannot build DETR.")
 
     model = DetrForObjectDetection.from_pretrained(pretrained_name)
 
-    # Expand conv1 on ResNet backbone
     old_conv = model.model.backbone.conv1
     model.model.backbone.conv1 = _expand_conv_in_channels(old_conv, in_channels)
 
-    # Replace classification head
     model.class_labels_classifier = nn.Linear(
         model.class_labels_classifier.in_features,
         num_classes,
@@ -166,6 +231,9 @@ def get_detr(
     return model
 
 
+# ---------------------------------------------------------------------
+# Unified factory
+# ---------------------------------------------------------------------
 def build_detector(
     *,
     detector: DetectorName,

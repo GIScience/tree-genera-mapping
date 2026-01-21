@@ -9,6 +9,14 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.transform import GeneralizedRCNNTransform
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
+
+from tree_genera_mapping.dl.detection.tree_dataset import (
+    TreeDetectionDataset,
+    detection_collate_fn,
+    basic_hflip_transform,
+)
+from tree_genera_mapping.dl.detection.tree_model import get_faster_rcnn_5ch
+
 import rasterio
 from tqdm import tqdm
 import time, csv
@@ -122,112 +130,6 @@ def visualize_predictions_with_confidence(model, dataset, num_samples=6, cols=3,
     plt.tight_layout()
     plt.show()
 
-# ------------------------ Dataset ------------------------
-class TreeSpeciesDataset(Dataset):
-    """
-    Expects:
-      image_dir/*.tif
-      label_dir/*.txt (YOLO format: class x_center y_center w h in relative coords)
-    """
-    def __init__(self, image_dir, label_dir, image_ids=None, transforms=None):
-        self.image_dir = image_dir
-        self.label_dir = label_dir
-
-        if image_ids is None:
-            self.image_ids = [f[:-4] for f in os.listdir(image_dir) if f.lower().endswith(".tif")]
-        else:
-            self.image_ids = list(image_ids)
-
-        self.transforms = transforms
-
-    def __len__(self):
-        return len(self.image_ids)
-
-    def __getitem__(self, idx):
-        image_id = self.image_ids[idx]
-        image_path = os.path.join(self.image_dir, f"{image_id}.tif")
-        label_path = os.path.join(self.label_dir, f"{image_id}.txt")
-
-        with rasterio.open(image_path) as src:
-            image = src.read().astype(np.float32) / 255.0  # assumes 0..255
-            height, width = image.shape[1:]
-
-        image = torch.tensor(image)
-
-        boxes = []
-        labels = []
-        if os.path.exists(label_path):
-            with open(label_path, "r") as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) != 5:
-                        continue
-                    try:
-                        class_id, x_center, y_center, w, h = map(float, parts)
-                        xmin = (x_center - w / 2) * width
-                        ymin = (y_center - h / 2) * height
-                        xmax = (x_center + w / 2) * width
-                        ymax = (y_center + h / 2) * height
-                        boxes.append([xmin, ymin, xmax, ymax])
-                        # your YOLO labels start at 0; FasterRCNN expects >0 for foreground
-                        labels.append(int(class_id) + 1)
-                    except ValueError:
-                        continue
-
-        if len(boxes) == 0:
-            boxes = torch.empty((0, 4), dtype=torch.float32)
-            labels = torch.empty((0,), dtype=torch.int64)
-        else:
-            boxes = torch.tensor(boxes, dtype=torch.float32)
-            labels = torch.tensor(labels, dtype=torch.int64)
-
-        target = {"boxes": boxes, "labels": labels, "image_id": torch.tensor([idx])}
-
-        if self.transforms:
-            image, target = self.transforms(image, target)
-
-        return image, target
-
-# ------------------------ Transform ------------------------
-def basic_transform(image, target):
-    if random.random() > 0.5:
-        image = image.flip(-1)
-        width = image.shape[2]
-        boxes = target["boxes"]
-        if boxes.numel() > 0:
-            boxes[:, [0, 2]] = width - boxes[:, [2, 0]]
-            target["boxes"] = boxes
-    return image, target
-
-# ------------------------ Model ------------------------
-def modify_resnet_input_channels(model, in_channels=5):
-    old_conv = model.backbone.body.conv1
-    new_conv = nn.Conv2d(
-        in_channels, old_conv.out_channels,
-        kernel_size=old_conv.kernel_size,
-        stride=old_conv.stride,
-        padding=old_conv.padding,
-        bias=False
-    )
-    with torch.no_grad():
-        new_conv.weight[:, :3, :, :] = old_conv.weight
-        if in_channels > 3:
-            extra = old_conv.weight.mean(dim=1, keepdim=True).repeat(1, in_channels - 3, 1, 1)
-            new_conv.weight[:, 3:, :, :] = extra
-    model.backbone.body.conv1 = new_conv
-    return model
-
-def get_faster_rcnn_5ch(num_classes, in_channels=5):
-    backbone = resnet_fpn_backbone("resnet50", pretrained=True)
-    model = FasterRCNN(backbone, num_classes=num_classes)
-    model = modify_resnet_input_channels(model, in_channels=in_channels)
-    model.transform = GeneralizedRCNNTransform(
-        min_size=800,
-        max_size=1333,
-        image_mean=[0.5] * in_channels,
-        image_std=[0.25] * in_channels,
-    )
-    return model
 
 # ------------------------ Training ------------------------
 def train_one_epoch(model, dataloader, optimizer):
@@ -350,15 +252,17 @@ def main():
     set_seed(SEED)
 
     # Train/val come from folders (NO random split here)
-    train_dataset = TreeSpeciesDataset(TRAIN_IMAGE_DIR, TRAIN_LABEL_DIR, transforms=basic_transform)
-    val_dataset = TreeSpeciesDataset(VAL_IMAGE_DIR, VAL_LABEL_DIR)
+    train_dataset = TreeDetectionDataset(TRAIN_IMAGE_DIR, TRAIN_LABEL_DIR, transform=basic_hflip_transform)
+    val_dataset = TreeDetectionDataset(VAL_IMAGE_DIR, VAL_LABEL_DIR, transform=None)
 
     print(f"Train: {len(train_dataset)} images | Val: {len(val_dataset)} images")
     print("🔍 Visualizing a few training examples before training starts...")
     show_training_examples_grid(train_dataset, num_samples=6, cols=3)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn, num_workers=2)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+                              collate_fn=detection_collate_fn, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False,
+                            collate_fn=detection_collate_fn, num_workers=2)
 
     model = get_faster_rcnn_5ch(num_classes=NUM_CLASSES, in_channels=5).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
