@@ -5,12 +5,12 @@ This repository provides a workflow for urban tree detection and genus mapping. 
 
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
-python acquisition/fetch_tiles.py  
+python scripts/fetch_tiles.py --output-dir cache/merged --tiles-gpkg data/tiles.gpkg --tmp-root cache/ --mode RGBIH --tile_ids 355_6048 355_6049
 ```
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
 ```bash
-python scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
+python scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path cache/models/pretrained_yolov11l_genus_genus.pth --output-dir cache/predictions
 ```
 
 

@@ -231,7 +231,7 @@ def build_tile_for_mode(
     tile_id = normalize_tile_id(tile_id)
     mode = mode.upper()
 
-    merged_dir = output_tiles / "merged"
+    merged_dir = output_tiles # / "merged"
     merged_dir.mkdir(parents=True, exist_ok=True)
 
     base = base_name_for_mode(mode, tile_id)
@@ -332,7 +332,7 @@ def parse_args():
 
     p.add_argument("--tiles-gpkg", required=True, help="GeoPackage containing 'dop_kachel'")
     p.add_argument("--tmp-root", required=True, help="Temp folder for downloads/unzips")
-    p.add_argument("--output-tiles", required=True, help="Output folder; writes to OUTPUT/merged/")
+    p.add_argument("--output-dir", required=True, help="Output folder; writes to OUTPUT-DIR/")
     p.add_argument("--mode", default="RGBIH", help="TileDataset mode - RGB, RGBI, RGBIH")
     p.add_argument("--keep-tmp", action="store_true", help="Keep per-tile temp directories")
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
@@ -355,7 +355,7 @@ def main():
     logging.info("Mode=%s → products=%s", mode, products)
 
     tmp_root = Path(args.tmp_root)
-    output_tiles = Path(args.output_tiles)
+    output_tiles = Path(args.output_dir)
     tmp_root.mkdir(parents=True, exist_ok=True)
     output_tiles.mkdir(parents=True, exist_ok=True)
 

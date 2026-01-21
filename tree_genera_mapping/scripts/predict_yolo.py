@@ -203,7 +203,7 @@ def main():
     parser.add_argument("--output_dir", default='cache/predictions', type=Path, required=False,
                         help="Folder to save final RGBIH tile")
     parser.add_argument("--tile_dir", default='cache/merged', type=str, required=False, help="Tile Directory")
-    parser.add_argument("--ckpt_path", default='models/yolov8_rgbih_best.pt', type=str, required=False,)
+    parser.add_argument("--ckpt_path", default='cache/models/yolov11_genus_best.pt', type=str, required=False,)
     parser.add_argument("--patch_size", default=640, type=int, required=False, help="Patch size for inference")
     parser.add_argument("--stride", default=512, type=int, required=False, help="Stride for inference")
     parser.add_argument("--conf", default=0.25, type=float, required=False, help="Confidence threshold for inference")
