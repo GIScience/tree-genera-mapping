@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_tile_dataset.py
+fetch_tiles.py
 
 Main entry point to download and generate merged tiles.
 

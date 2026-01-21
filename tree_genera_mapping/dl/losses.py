@@ -9,8 +9,6 @@ class FocalCrossEntropy(nn.Module):
       - alpha=float: scalar in [0,1]
       - alpha=torch.Tensor([C]): per-class alpha weights (sum unconstrained)
     """
-
-
     def __init__(self, gamma: float = 1.5, alpha: Optional[torch.Tensor] = None, reduction: str = "mean"):
         super().__init__()
         self.gamma = float(gamma)

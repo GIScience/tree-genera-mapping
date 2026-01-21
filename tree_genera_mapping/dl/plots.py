@@ -1,8 +1,15 @@
-import numpy as np
 import pandas as pd
-from pathlib import Path
 from typing import Dict, List
+from __future__ import annotations
+
+import random
+from pathlib import Path
+from typing import Iterable, Optional, Tuple
+
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
+import torch
 
 # -------------------------------- plots (matplotlib) --------------------------------
 def plot_confusion(cm: np.ndarray, classes: Dict[int, str], out_png: Path, normalize: bool = True) -> None:
@@ -113,3 +120,142 @@ def plot_history_curves(history: List[dict], out_dir: Path) -> None:
     fig3.savefig(out_dir / "results.png", dpi=220)
     plt.close(fig3)
 
+# ---------------- Tree Visualization ----------------
+def _to_rgb(image: torch.Tensor) -> np.ndarray:
+    """
+    image: [C,H,W] float tensor, expected in [0,1] or close.
+    Returns: HxWx3 float numpy clipped to [0,1]
+    """
+    if image.ndim != 3:
+        raise ValueError(f"Expected [C,H,W], got {tuple(image.shape)}")
+    c, h, w = image.shape
+    if c < 3:
+        raise ValueError("Need at least 3 channels to visualize as RGB.")
+    rgb = image[:3].detach().cpu().permute(1, 2, 0).numpy()
+    return np.clip(rgb, 0.0, 1.0)
+
+
+def draw_boxes(
+    ax,
+    boxes: np.ndarray,
+    color: str,
+    label: Optional[str] = None,
+    scores: Optional[np.ndarray] = None,
+    score_fmt: str = "{:.2f}",
+    linewidth: float = 1.2,
+) -> None:
+    """
+    boxes: Nx4 in xyxy pixel coords
+    """
+    if boxes is None or len(boxes) == 0:
+        return
+
+    for i, b in enumerate(boxes):
+        x1, y1, x2, y2 = [float(x) for x in b]
+        w = max(0.0, x2 - x1)
+        h = max(0.0, y2 - y1)
+        rect = patches.Rectangle(
+            (x1, y1),
+            w,
+            h,
+            linewidth=linewidth,
+            edgecolor=color,
+            facecolor="none",
+        )
+        ax.add_patch(rect)
+
+        # optional text
+        if scores is not None and i < len(scores):
+            txt = score_fmt.format(float(scores[i]))
+        elif label is not None:
+            txt = str(label)
+        else:
+            txt = None
+
+        if txt:
+            ax.text(
+                x1,
+                max(0.0, y1 - 2.0),
+                txt,
+                color="white",
+                fontsize=8,
+                bbox=dict(facecolor=color, alpha=0.55, edgecolor="none", boxstyle="round,pad=0.2"),
+            )
+
+
+@torch.no_grad()
+def save_prediction_grid(
+    *,
+    model: torch.nn.Module,
+    dataset,
+    out_png: Path,
+    device: torch.device,
+    n: int = 9,
+    cols: int = 3,
+    score_thresh: float = 0.05,
+    show_gt: bool = True,
+    seed: int = 0,
+) -> None:
+    """
+    dataset must return (image, target) where:
+      image: torch.Tensor [C,H,W]
+      target: dict with "boxes" (Tensor Nx4), optional "labels"
+
+    Saves a grid to out_png.
+    """
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+
+    model.eval()
+
+    n = int(min(n, len(dataset)))
+    cols = int(max(1, cols))
+    rows = (n + cols - 1) // cols
+
+    rng = random.Random(seed)
+    idxs = list(range(len(dataset)))
+    rng.shuffle(idxs)
+    idxs = idxs[:n]
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
+    if rows == 1 and cols == 1:
+        axes = np.array([axes])
+    axes = np.array(axes).reshape(rows, cols)
+
+    for k, idx in enumerate(idxs):
+        r = k // cols
+        c = k % cols
+        ax = axes[r, c]
+
+        img, tgt = dataset[idx]
+        rgb = _to_rgb(img)
+
+        ax.imshow(rgb)
+        ax.axis("off")
+        ax.set_title(f"idx={idx}")
+
+        # GT (green)
+        if show_gt and isinstance(tgt, dict) and "boxes" in tgt and tgt["boxes"].numel() > 0:
+            gt_boxes = tgt["boxes"].detach().cpu().numpy()
+            draw_boxes(ax, gt_boxes, color="g", label="GT", linewidth=1.6)
+
+        # Pred (red)
+        out = model([img.to(device)])[0]
+        boxes = out.get("boxes", torch.empty((0, 4))).detach().cpu().numpy()
+        scores = out.get("scores", torch.empty((0,))).detach().cpu().numpy()
+
+        keep = scores >= float(score_thresh)
+        boxes = boxes[keep] if len(boxes) else boxes
+        scores = scores[keep] if len(scores) else scores
+
+        draw_boxes(ax, boxes, color="r", scores=scores, linewidth=1.2)
+
+    # blank any unused axes
+    for k in range(n, rows * cols):
+        r = k // cols
+        c = k % cols
+        axes[r, c].axis("off")
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=220)
+    plt.close(fig)

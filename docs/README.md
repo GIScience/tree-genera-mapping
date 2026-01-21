@@ -5,12 +5,12 @@ This repository provides a workflow for urban tree detection and genus mapping. 
 
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
-python acquisition/run_tile_dataset.py  
+python acquisition/fetch_tiles.py  
 ```
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
 ```bash
-python scripts/run_inference.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
+python scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
 ```
 
 
@@ -46,7 +46,7 @@ python scripts/segment_trees.py --trees /path/to/GreeHill_dataset.gpkg --labels 
 3.1. detection (YOLO images + txt labels)
 - **NOTE: HUMAN-IN-THE-LOOP CURATION** of tree labels before running generation of training labels. QGIS can be used to visualize and edit the generated weak tree bounding boxes.  
 ```bash
- python scripts/generate_train_dataset.py det \
+ python scripts/build_datasets.py det \
   --tiles-gpkg data/tiles.gpkg \
   --weak-bboxes-gpkg cache/weak_bboxes.gpkg \
   --images-dir /path/to/tiles \
@@ -59,7 +59,7 @@ python scripts/segment_trees.py --trees /path/to/GreeHill_dataset.gpkg --labels 
 - this is an image with 5-channels (RGB + IR + Height) and corresponding genus labels for each tree/patch.
 - Size is uniform for all patches (e.g., 128x128px) 
 ```bash
-python scripts/generate_train_dataset.py patches \
+python scripts/build_datasets.py patches \
   --tiles-gpkg data/tiles.gpkg \
   --genus-labels-gpkg cache/genus_labels.gpkg \
   --images-dir /path/to/tiles \
@@ -91,7 +91,7 @@ python train/yolo_eval.py
    1. Download multispectral aerial imagery and airborne LiDAR data for all tiles in `data/tiles.gpkg` using the `acquisition/run_tile_dataset.py` script.
 
 ```bash
-python acquisition/run_tile_dataset.py --tiles-gpkg data/tiles.gpkg --output-dir cache/tiles_5ch --mode RGBIH
+python acquisition/fetch_tiles.py --tiles-gpkg data/tiles.gpkg --output-dir cache/tiles_5ch --mode RGBIH
 ```
    2. Perform large-scale inference using the trained student model with tiled processing and GPU-parallel execution. 
      - see the example of the code `jobs/run_inference.py`

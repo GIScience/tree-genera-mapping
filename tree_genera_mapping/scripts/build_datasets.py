@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-generate_train_dataset.py
+build_datasets.py
 
 Generate training data for two model types:
 

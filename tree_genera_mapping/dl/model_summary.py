@@ -1,6 +1,5 @@
 import torchinfo
 import torch
-
 def summary(model,
             batch_size=4,
             in_channels=5,

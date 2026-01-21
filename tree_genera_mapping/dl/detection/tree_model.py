@@ -56,7 +56,7 @@ class NormalizeConfig:
 
 
 # ---------------------------------------------------------------------
-# Conv1 expansion (moved from weak_tree_train.py)
+# Conv1 expansion (moved from tree_train.py)
 # ---------------------------------------------------------------------
 def modify_resnet_input_channels(model: FasterRCNN, in_channels: int = 5) -> FasterRCNN:
     """
@@ -124,14 +124,13 @@ def _expand_conv_in_channels(conv: nn.Conv2d, in_channels: int) -> nn.Conv2d:
 
 
 def _default_norm(in_channels: int) -> NormalizeConfig:
-    # matches your weak_tree_train.py defaults
+    # matches your tree_train.py defaults
     return NormalizeConfig(
         mean=[0.5] * in_channels,
         std=[0.25] * in_channels,
         min_size=800,
         max_size=1333,
     )
-
 
 # ---------------------------------------------------------------------
 # Faster R-CNN (canonical factory)
@@ -170,7 +169,7 @@ def get_faster_rcnn(
 
 
 # ---------------------------------------------------------------------
-# Backwards-compatible alias (moved from weak_tree_train.py)
+# Backwards-compatible alias (moved from tree_train.py)
 # ---------------------------------------------------------------------
 def get_faster_rcnn_5ch(
     num_classes: int,

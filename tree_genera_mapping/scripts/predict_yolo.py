@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Run inference on LGL tiles using a YOLO model trained on RGBIH data.
-
 """
 import argparse
 import logging
