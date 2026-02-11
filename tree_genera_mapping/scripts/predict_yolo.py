@@ -189,10 +189,6 @@ def run(ckpt_path: str,
                                     iou=0.4
                                 )
 
-
-
-
-
     return None
 
 def main():
