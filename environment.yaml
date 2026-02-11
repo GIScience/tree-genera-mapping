@@ -8,16 +8,13 @@ dependencies:
   - python=3.11
   - pip
   - findutils 
-
   - numpy
   - scipy
   - pandas
   - scikit-learn
-
   - pytorch
   - torchvision
   - cpuonly
-
   - gdal
   - rasterio
   - geopandas
@@ -25,7 +22,6 @@ dependencies:
   - pyproj
   - pyogrio
   - fiona
-
   - pillow
   - tifffile
   - scikit-image
@@ -34,6 +30,8 @@ dependencies:
   - requests
   - pyyaml
   - opencv
+  - jupyterlab
+  - ipykernel
 
   - pip:
       - ultralytics==8.3.221

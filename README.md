@@ -34,6 +34,10 @@ Create and activate a Conda environment:
 conda env create -f environment.yaml
 conda activate map-tree-genera
 ```
+Create a kernel to run notebooks scripts
+```bash
+python -m ipykernel install --user --name map-tree-genera --display-name "Python (tree-genera)"
+```
 
 How to run the pre-trained YOLOv11l model 5CH imagery
 1. Download LGL products to Generate TileDataset for selected tile ids:

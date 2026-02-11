@@ -9,19 +9,12 @@ dependencies:
   - python=3.11
   - pip
   - findutils
-
-  # core
   - numpy
   - scipy
   - pandas
   - scikit-learn
-
-  # PyTorch GPU (driver CUDA 13 is fine; runtime can be CUDA 12.x)
-  - pytorch
   - torchvision
   - pytorch-cuda=12.4
-
-  # geospatial stack
   - gdal
   - rasterio
   - geopandas
@@ -29,8 +22,6 @@ dependencies:
   - pyproj
   - pyogrio
   - fiona
-
-  # utils
   - pillow
   - tifffile
   - scikit-image
@@ -38,6 +29,8 @@ dependencies:
   - tqdm
   - requests
   - pyyaml
+  - jupyterlab
+  - ipykernel
 
   - pip:
       - opencv-python-headless
