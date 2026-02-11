@@ -99,7 +99,6 @@ def run_inference_on_tile(model, tile_path, out_dir, patch_size=640, stride=512,
                 geom = box(x1_map, y2_map, x2_map, y1_map)
                 # === Extra info ===
                 # height: max of 5th band inside bbox
-                #TODO if there is no height json file, set to normalised values between 0-255
                 height_patch = img[4, y1i:y2i, x1i:x2i]
                 max_height = float(height_patch.max()) if height_patch.size > 0 else np.nan
                 min_height = float(height_patch.min()) if height_patch.size > 0 else np.nan
@@ -203,7 +202,7 @@ def main():
     parser.add_argument("--output_dir", default='cache/predictions', type=Path, required=False,
                         help="Folder to save final RGBIH tile")
     parser.add_argument("--tile_dir", default='cache/merged', type=str, required=False, help="Tile Directory")
-    parser.add_argument("--ckpt_path", default='cache/models/yolov11_genus_best.pt', type=str, required=False,)
+    parser.add_argument("--ckpt_path", default='cache/models/yolov11_tree_genus.pt', type=str, required=False,)
     parser.add_argument("--patch_size", default=640, type=int, required=False, help="Patch size for inference")
     parser.add_argument("--stride", default=512, type=int, required=False, help="Stride for inference")
     parser.add_argument("--conf", default=0.25, type=float, required=False, help="Confidence threshold for inference")
