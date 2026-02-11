@@ -1,23 +1,27 @@
-name: map-tree-genera
+name: map-tree-genera-gpu
 
 channels:
-  - conda-forge
   - pytorch
+  - nvidia
+  - conda-forge
 
 dependencies:
   - python=3.11
   - pip
-  - findutils 
+  - findutils
 
+  # core
   - numpy
   - scipy
   - pandas
   - scikit-learn
 
+  # PyTorch GPU (driver CUDA 13 is fine; runtime can be CUDA 12.x)
   - pytorch
   - torchvision
-  - cpuonly
+  - pytorch-cuda=12.4
 
+  # geospatial stack
   - gdal
   - rasterio
   - geopandas
@@ -26,6 +30,7 @@ dependencies:
   - pyogrio
   - fiona
 
+  # utils
   - pillow
   - tifffile
   - scikit-image
@@ -33,9 +38,9 @@ dependencies:
   - tqdm
   - requests
   - pyyaml
-  - opencv
 
   - pip:
+      - opencv-python-headless
       - ultralytics==8.3.221
       - ultralytics-thop
       - albumentations
