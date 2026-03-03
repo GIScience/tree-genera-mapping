@@ -2,21 +2,22 @@
 """
 build_datasets.py
 
-Generate training data for two model types:
+Generate training data for two types:
 
-1) YOLO detection dataset: chips + bbox labels
+1) Tree detection dataset: subtiles(chips) + bbox labels
    Output layout:
-     <out>/yolo_<mode>/images/train, images/val
-     <out>/yolo_<mode>/labels/train, labels/val
+     <out>/yolo_<mode>/images/train, images/val, images/test
+     <out>/yolo_<mode>/labels/train, labels/val, labels/test
 
-2) Image classification dataset: patches around labeled trees
+2) Genus classification dataset: 
    Output layout:
      <out>/patches_<mode>_<patch>/train/<class_name>/*.tif
      <out>/patches_<mode>_<patch>/val/<class_name>/*.tif
+     <out>/patches_<mode>_<patch>/test/<classname>/*.tif
 
 Splitting:
 - Default split is by tile_id (recommended to avoid spatial leakage).
-- If dataset already has split folders, you can supply train/val tile lists explicitly.
+- If dataset already has split folders, you can supply train/val/test tile lists explicitly.
 """
 
 from __future__ import annotations
@@ -80,11 +81,12 @@ def make_tile_split(
     seed: int,
     train_list: Optional[Sequence[str]] = None,
     val_list: Optional[Sequence[str]] = None,
-) -> Tuple[Set[str], Set[str]]:
+    test_list: Optional[Sequence[str]] = None,
+) -> Tuple[Set[str], Set[str], Set[str]]:
     """
-    Returns train_tiles, val_tiles.
+    Returns train_tiles, val_tiles, test_tiles.
 
-    If train_list/val_list provided -> use them (and validate overlap).
+    If train_list/val_list/test_list provided -> use them (and validate overlap).
     Else do random split with fixed seed.
     """
     tile_ids = [str(t) for t in tile_ids]
@@ -121,6 +123,7 @@ def make_tile_split(
     n_val = int(round(len(ids) * float(val_frac)))
     val_set = set(ids[:n_val])
     train_set = set(ids[n_val:])
+    test_set = set(ids[])
     return train_set, val_set
 
 
@@ -165,6 +168,8 @@ def make_detection_dataset(
     (out_root / "images" / "val").mkdir(parents=True, exist_ok=True)
     (out_root / "labels" / "train").mkdir(parents=True, exist_ok=True)
     (out_root / "labels" / "val").mkdir(parents=True, exist_ok=True)
+     (out_root / "images" / "test").mkdir(parents=True, exist_ok=True)
+    (out_root / "labels" / "test").mkdir(parents=True, exist_ok=True)
 
     gdf_tiles = gpd.read_file(tiles_gpkg)
     gdf_tree = gpd.read_file(weak_bboxes_gpkg)
@@ -200,7 +205,7 @@ def make_detection_dataset(
     train_list = _read_lines(train_tiles_txt)
     val_list = _read_lines(val_tiles_txt)
     train_tiles, val_tiles = make_tile_split(tile_ids, val_frac=val_frac, seed=seed, train_list=train_list, val_list=val_list)
-    logger.info("Tile split: train=%d val=%d (total=%d)", len(train_tiles), len(val_tiles), len(tile_ids))
+    logger.info("Tile split: train=%d val=%d test=%d (total=%d)", len(train_tiles), len(val_tiles), len(test_tiles),len(tile_ids))
 
     # We still use ImageDataSet to do chip+label writing.
     # Best: if ImageDataSet supports output_dir per call, pass train/val dir.

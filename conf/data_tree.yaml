@@ -2,6 +2,7 @@
 path: cache
 train: images/train
 val: images/val 
+test: images/test
 
 # Number of multispectral image channels
 channels: 5

@@ -2,7 +2,7 @@
 """
 fetch_tiles.py
 
-Main entry point to download and generate merged tiles.
+Main entry point to download and generate merged parent tiles.
 
 Modes
 - RGB   : downloads dop20rgb, writes merged/rgb_<tile_id>.tif
