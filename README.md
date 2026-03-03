@@ -51,6 +51,33 @@ python scripts/fetch_tiles.py  \
 python scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
 ```
 
+
+
+## Train Model
+
+1. Prepare dataset for Genera Mapping
+   ```bash
+   python -m tree_genera_mapping.scripts.build_dataset det \
+       --tiles-gpkg /data/lgl_bw_tiles.gpkg \
+       --bboxes-gpkg /../path_to_/pseudo_labels.gpkg \
+       --images-dir /../path_to_tiff_tiles \
+       --output-dir /../path_to_/subtiles_640_20 \
+       --mode rgbih   \ 
+       --tile-id-col tile_id \
+       --label-col top1_class \
+       --classes-csv /data/genera_labels.csv  \
+       --unknown-class skip \
+       --size 640 \
+       --overlap 0.2  \
+       --tile-split-table /data/tiles_split.txt  \
+       --subtile-split-table /data/subtiles_split.txt   \
+       --include-empty-tiles
+   ```
+2. run code
+```bash
+    python -m tree_genera_mapping.dl.detection.yolo_train.py
+```
+
 ## Model Checkpoints
 | Task                              | Model Name | Modification    | URL Link                                                                             |
 |-----------------------------------|------------|-----------------|--------------------------------------------------------------------------------------|
