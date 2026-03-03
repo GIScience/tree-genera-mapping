@@ -150,7 +150,7 @@ def add_bbox_from_canopy_width(
 
 def generate_training_labels(
     trees_path: str | None,
-    labels_path: str = "conf/genera_labels.csv",
+    labels_path: str = "data/genera_labels.csv",
     output_path: str = "cache/tree_labels.gpkg",
     genus_col: str = "genus",
     id_col: str = "tree_id",

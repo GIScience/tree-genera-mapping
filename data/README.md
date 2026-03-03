@@ -38,6 +38,9 @@ These datasets are intended to be aligned with the grid defined in
 
 Split file to tiles
 
+## subtile_split.txt
+subtile_id, split mode size and overlap arguments
+
 ##  *_subtiles_640_20.txt
 
 Three TXT files with the list of subtiles for train/validation dataset

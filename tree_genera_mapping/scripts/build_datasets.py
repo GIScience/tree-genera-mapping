@@ -1,31 +1,50 @@
 #!/usr/bin/env python3
 """
-build_datasets.py
+build_dataset.py
 
-Generate training data for two types:
+Build YOLO detection chips + labels, and genus classification patches,
+with leakage-safe SPLITS at the parent tile level.
 
-1) Tree detection dataset: subtiles(chips) + bbox labels
-   Output layout:
-     <out>/yolo_<mode>/images/train, images/val, images/test
-     <out>/yolo_<mode>/labels/train, labels/val, labels/test
+Split modes (tile-level):
+1) Table mode (recommended):
+   --tile-split-table data/tiles_split.txt
+   Table must contain columns: tile_id, split (train|val|test).
+   Optional columns are allowed (e.g., dop_kachel).
 
-2) Genus classification dataset: 
-   Output layout:
-     <out>/patches_<mode>_<patch>/train/<class_name>/*.tif
-     <out>/patches_<mode>_<patch>/val/<class_name>/*.tif
-     <out>/patches_<mode>_<patch>/test/<classname>/*.tif
+2) Random mode:
+   If --tile-split-table is NOT provided -> random split by tile_id using
+   --val-frac and --test-frac.
 
-Splitting:
-- Default split is by tile_id (recommended to avoid spatial leakage).
-- If dataset already has split folders, you can supply train/val/test tile lists explicitly.
+Optional subtile filtering (detection only):
+- If you provide --subtile-split-table (CSV/TXT with columns subtile_id,split,...),
+  chips will be written ONLY if subtile_id is in the corresponding split list.
+  subtile_id format: "32_464_5487_91" (tile_id + "_" + chip_index)
+
+Chip naming:
+- Parent tile raster: <images-dir>/<mode>_<tile_id>.tif
+  e.g. rgbih_32_388_5279.tif
+- Chip output: <mode>_<tile_id>_<n>.tif
+  e.g. rgbih_32_388_5279_0.tif
+
+Outputs:
+1) Detection YOLO dataset:
+   <out>/yolo_<mode>/
+     images/{train,val,test}/
+     labels/{train,val,test}/
+
+2) Classification patches:
+   <out>/patches_<mode>_<patch>/
+     {train,val,test}/<class_name>/*.tif
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
+import os
 import random
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Optional, Sequence, Set, Tuple
 
 import geopandas as gpd
 import numpy as np
@@ -34,29 +53,22 @@ import rasterio
 from rasterio.windows import Window
 from tqdm import tqdm
 
+
 from tree_genera_mapping.preprocess.detection_dataset import ImageDataSet
+from tree_genera_mapping.misc.tile_partition import dopkachel_to_tile_id, ensure_tile_id_from_grid
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+ALLOWED_SPLITS = {"train", "val", "test"}
 
-# -----------------------------
+
+# -----------------------------------------------------------------------------
 # helpers
-# -----------------------------
-def dopkachel_to_tile_id(dop_kachel: str) -> str:
-    """Convert BW dop_kachel string like '323556048' -> '32_355_6048'."""
-    s = str(dop_kachel)
-    if len(s) < 9:
-        raise ValueError(f"dop_kachel looks too short: {dop_kachel}")
-    return f"{s[:2]}_{s[2:5]}_{s[-4:]}"
-
-
-def find_tile_raster(images_dir: Path, mode: str, tile_id: str) -> Path:
-    """Expected naming: <images_dir>/<mode>_<tile_id>.tif"""
-    return images_dir / f"{mode}_{tile_id}.tif"
-
-
-def ensure_same_crs(a: gpd.GeoDataFrame, b: gpd.GeoDataFrame) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+# -----------------------------------------------------------------------------
+def ensure_same_crs(
+    a: gpd.GeoDataFrame, b: gpd.GeoDataFrame
+) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     if a.crs is None or b.crs is None:
         raise ValueError("Both GeoDataFrames must have CRS set.")
     if a.crs != b.crs:
@@ -64,190 +76,297 @@ def ensure_same_crs(a: gpd.GeoDataFrame, b: gpd.GeoDataFrame) -> Tuple[gpd.GeoDa
     return a, b
 
 
-def _read_lines(path: Optional[str]) -> Optional[List[str]]:
-    if path is None:
-        return None
+def _sniff_sep(path: Path) -> str:
+    first = path.read_text(encoding="utf-8").splitlines()[0]
+    return "\t" if "\t" in first else ","
+
+
+def _validate_overlap(overlap: float) -> None:
+    if not (0.0 <= overlap < 1.0):
+        raise ValueError("--overlap must be in [0.0, 1.0). Example: 0.2 for 20% overlap.")
+
+
+def ensure_tile_id_column(
+    gdf_tiles: gpd.GeoDataFrame,
+    *,
+    tile_id_col: str = "tile_id",
+    prefer_dop_kachel: bool = True,
+) -> gpd.GeoDataFrame:
+    """
+    Ensure gdf_tiles has a tile_id column.
+
+    Priority:
+      1) existing tile_id_col
+      2) dop_kachel/dopkachel -> dopkachel_to_tile_id
+      3) deterministic grid id -> ensure_tile_id_from_grid
+    """
+    gdf = gdf_tiles.copy()
+
+    if tile_id_col in gdf.columns:
+        gdf[tile_id_col] = gdf[tile_id_col].astype(str)
+        return gdf
+
+    if prefer_dop_kachel:
+        if "dop_kachel" in gdf.columns:
+            gdf[tile_id_col] = gdf["dop_kachel"].astype(str).apply(dopkachel_to_tile_id)
+            return gdf
+        if "dopkachel" in gdf.columns:
+            gdf[tile_id_col] = gdf["dopkachel"].astype(str).apply(dopkachel_to_tile_id)
+            return gdf
+
+    # fallback: deterministic grid-based id from geometry (centroid)
+    gdf = ensure_tile_id_from_grid(gdf, tile_id_col=tile_id_col, overwrite=False)
+    return gdf
+
+
+def find_tile_raster(images_dir: Path, mode: str, tile_id: str) -> Path:
+    """
+    Expected naming: <images_dir>/<mode>_<tile_id>.tif
+    e.g. rgbih_32_388_5279.tif
+    """
+    return images_dir / f"{mode}_{tile_id}.tif"
+
+
+# -----------------------------------------------------------------------------
+# split loading
+# -----------------------------------------------------------------------------
+def load_tile_split_table(path: str, *, tile_id_col: str = "tile_id", split_col: str = "split") -> Dict[str, str]:
+    """
+    CSV/TSV/TXT with columns: tile_id, split.
+    Accepts 'valid' and normalizes to 'val'.
+    Returns tile_id -> split.
+    """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(p)
-    lines = [x.strip() for x in p.read_text().splitlines() if x.strip()]
-    return lines or None
+
+    df = pd.read_csv(p, sep=_sniff_sep(p), dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+
+    if tile_id_col not in df.columns or split_col not in df.columns:
+        raise ValueError(f"Split table must contain columns: {tile_id_col}, {split_col}")
+
+    df[tile_id_col] = df[tile_id_col].astype(str).str.strip()
+    df[split_col] = df[split_col].astype(str).str.strip().str.lower().replace({"valid": "val"})
+
+    bad = set(df[split_col].unique()) - ALLOWED_SPLITS
+    if bad:
+        raise ValueError(f"Invalid split values {bad}. Allowed: {ALLOWED_SPLITS}")
+
+    if df[tile_id_col].duplicated().any():
+        dupes = df.loc[df[tile_id_col].duplicated(), tile_id_col].tolist()[:10]
+        raise ValueError(f"Duplicate tile_id in tile split table (examples): {dupes}")
+
+    return dict(zip(df[tile_id_col], df[split_col]))
 
 
-def make_tile_split(
+def make_tile_split_random(
     tile_ids: Sequence[str],
     *,
     val_frac: float,
+    test_frac: float,
     seed: int,
-    train_list: Optional[Sequence[str]] = None,
-    val_list: Optional[Sequence[str]] = None,
-    test_list: Optional[Sequence[str]] = None,
 ) -> Tuple[Set[str], Set[str], Set[str]]:
-    """
-    Returns train_tiles, val_tiles, test_tiles.
+    if not (0.0 <= val_frac < 1.0) or not (0.0 <= test_frac < 1.0) or (val_frac + test_frac >= 1.0):
+        raise ValueError("--val-frac and --test-frac must be in [0,1) and sum < 1")
 
-    If train_list/val_list/test_list provided -> use them (and validate overlap).
-    Else do random split with fixed seed.
-    """
-    tile_ids = [str(t) for t in tile_ids]
-    all_set = set(tile_ids)
-
-    if train_list is not None or val_list is not None:
-        train_set = set(map(str, train_list or []))
-        val_set = set(map(str, val_list or []))
-
-        overlap = train_set & val_set
-        if overlap:
-            raise ValueError(f"train_tiles and val_tiles overlap: {sorted(list(overlap))[:10]} ...")
-
-        # If only one provided, fill the rest
-        if train_list is None:
-            train_set = all_set - val_set
-        if val_list is None:
-            val_set = all_set - train_set
-
-        # Validate
-        missing = (train_set | val_set) - all_set
-        if missing:
-            raise ValueError(f"Provided tile ids not found in available tiles: {sorted(list(missing))[:10]} ...")
-
-        # Anything not assigned goes to train (safe default)
-        unassigned = all_set - (train_set | val_set)
-        train_set |= unassigned
-        return train_set, val_set
-
-    # random split
+    ids = [str(x) for x in tile_ids]
     rng = random.Random(seed)
-    ids = tile_ids[:]
     rng.shuffle(ids)
-    n_val = int(round(len(ids) * float(val_frac)))
-    val_set = set(ids[:n_val])
-    train_set = set(ids[n_val:])
-    test_set = set(ids[])
-    return train_set, val_set
+
+    n = len(ids)
+    n_val = int(round(n * val_frac))
+    n_test = int(round(n * test_frac))
+
+    val = set(ids[:n_val])
+    test = set(ids[n_val:n_val + n_test])
+    train = set(ids[n_val + n_test:])
+    return train, val, test
 
 
-def _ensure_tile_id_column(gdf_tiles: gpd.GeoDataFrame, tile_id_col: str) -> gpd.GeoDataFrame:
-    gdf_tiles = gdf_tiles.copy()
-    if tile_id_col not in gdf_tiles.columns:
-        if "dop_kachel" in gdf_tiles.columns:
-            gdf_tiles[tile_id_col] = gdf_tiles["dop_kachel"].astype(str).apply(dopkachel_to_tile_id)
-        else:
-            raise ValueError(f"Tiles file must contain '{tile_id_col}' or 'dop_kachel'.")
-    gdf_tiles[tile_id_col] = gdf_tiles[tile_id_col].astype(str)
-    return gdf_tiles
+def build_split_sets(
+    *,
+    gdf_tiles: gpd.GeoDataFrame,
+    tile_id_col: str,
+    tile_split_table: Optional[str],
+    val_frac: float,
+    test_frac: float,
+    seed: int,
+) -> Tuple[Set[str], Set[str], Set[str]]:
+    available = gdf_tiles[tile_id_col].astype(str).tolist()
+    available_set = set(available)
+
+    if tile_split_table:
+        split_map = load_tile_split_table(tile_split_table, tile_id_col=tile_id_col, split_col="split")
+        unknown = set(split_map.keys()) - available_set
+        if unknown:
+            raise ValueError(f"tiles_split contains tile_ids not in tiles gpkg (examples): {sorted(list(unknown))[:10]}")
+
+        train = {tid for tid, sp in split_map.items() if sp == "train"}
+        val = {tid for tid, sp in split_map.items() if sp == "val"}
+        test = {tid for tid, sp in split_map.items() if sp == "test"}
+        return train, val, test
+
+    # random fallback
+    return make_tile_split_random(available, val_frac=val_frac, test_frac=test_frac, seed=seed)
 
 
-# -----------------------------
+def load_subtile_split_table(path: str) -> Tuple[Set[str], Set[str], Set[str]]:
+    """
+    CSV/TSV/TXT with columns: subtile_id, split (train|val|test).
+    Example subtile_id: 32_464_5487_91
+    Returns (train_set, val_set, test_set) of subtile_id strings.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(p)
+
+    df = pd.read_csv(p, sep=_sniff_sep(p), dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+    if "subtile_id" not in df.columns or "split" not in df.columns:
+        raise ValueError("Subtile split table must contain columns: subtile_id, split")
+
+    df["subtile_id"] = df["subtile_id"].astype(str).str.strip()
+    df["split"] = df["split"].astype(str).str.strip().str.lower().replace({"valid": "val"})
+
+    bad = set(df["split"].unique()) - ALLOWED_SPLITS
+    if bad:
+        raise ValueError(f"Invalid split values in subtile table {bad}. Allowed: {ALLOWED_SPLITS}")
+
+    train = set(df.loc[df["split"] == "train", "subtile_id"])
+    val = set(df.loc[df["split"] == "val", "subtile_id"])
+    test = set(df.loc[df["split"] == "test", "subtile_id"])
+    return train, val, test
+
+
+# -----------------------------------------------------------------------------
 # 1) YOLO detection dataset
-# -----------------------------
+# -----------------------------------------------------------------------------
 def make_detection_dataset(
     *,
     tiles_gpkg: str,
-    weak_bboxes_gpkg: str,
+    bboxes_gpkg: str,
     images_dir: str,
     output_dir: str,
     mode: str,
-    tile_id_col: str = "tile_id",
-    size: int = 640,
-    overlap: float = 0.0,
-    val_frac: float = 0.2,
-    seed: int = 42,
-    train_tiles_txt: Optional[str] = None,
-    val_tiles_txt: Optional[str] = None,
+    tile_id_col: str,
+    size: int,
+    overlap: float,
+    tile_split_table: Optional[str],
+    subtile_split_table: Optional[str],
+    val_frac: float,
+    test_frac: float,
+    seed: int,
+    include_empty_tiles: bool,
 ) -> None:
-    """
-    Builds YOLO-ready dataset from weak bboxes with train/val split.
-    Output:
-      <out>/yolo_<mode>/images/train|val
-      <out>/yolo_<mode>/labels/train|val
-    """
+    _validate_overlap(overlap)
+
     images_dir_p = Path(images_dir)
+    if not images_dir_p.exists():
+        raise FileNotFoundError(images_dir_p)
+
     out_root = Path(output_dir) / f"yolo_{mode}"
-    (out_root / "images" / "train").mkdir(parents=True, exist_ok=True)
-    (out_root / "images" / "val").mkdir(parents=True, exist_ok=True)
-    (out_root / "labels" / "train").mkdir(parents=True, exist_ok=True)
-    (out_root / "labels" / "val").mkdir(parents=True, exist_ok=True)
-     (out_root / "images" / "test").mkdir(parents=True, exist_ok=True)
-    (out_root / "labels" / "test").mkdir(parents=True, exist_ok=True)
+    for split in ("train", "val", "test"):
+        (out_root / "images" / split).mkdir(parents=True, exist_ok=True)
+        (out_root / "labels" / split).mkdir(parents=True, exist_ok=True)
 
     gdf_tiles = gpd.read_file(tiles_gpkg)
-    gdf_tree = gpd.read_file(weak_bboxes_gpkg)
+    gdf_boxes = gpd.read_file(bboxes_gpkg)
 
     if gdf_tiles.empty:
         raise ValueError(f"No tiles found in {tiles_gpkg}")
-    if gdf_tree.empty:
-        raise ValueError(f"No bboxes found in {weak_bboxes_gpkg}")
+    if gdf_boxes.empty:
+        logger.warning("No bboxes found in %s. You may only get negatives.", bboxes_gpkg)
 
-    gdf_tiles, gdf_tree = ensure_same_crs(gdf_tiles, gdf_tree)
-    gdf_tiles = _ensure_tile_id_column(gdf_tiles, tile_id_col)
+    gdf_tiles, gdf_boxes = ensure_same_crs(gdf_tiles, gdf_boxes)
+    gdf_tiles = ensure_tile_id_column(gdf_tiles, tile_id_col=tile_id_col, prefer_dop_kachel=True)
 
-    # tiles that intersect any bbox
-    try:
-        matching_idxs = gpd.sjoin(gdf_tiles, gdf_tree, how="inner", predicate="intersects").index.unique()
-    except Exception:
-        if tile_id_col in gdf_tree.columns:
-            tiles = set(gdf_tree[tile_id_col].astype(str).unique())
-            matching_idxs = gdf_tiles[gdf_tiles[tile_id_col].astype(str).isin(tiles)].index.unique()
-        else:
-            raise RuntimeError(
-                "Spatial join failed and cannot fallback by tile id column. "
-                f"Check CRS and ensure '{tile_id_col}' exists in bboxes gpkg."
-            )
+    train_tiles, val_tiles, test_tiles = build_split_sets(
+        gdf_tiles=gdf_tiles,
+        tile_id_col=tile_id_col,
+        tile_split_table=tile_split_table,
+        val_frac=val_frac,
+        test_frac=test_frac,
+        seed=seed,
+    )
 
-    gdf_tiles_filtered = gdf_tiles.loc[matching_idxs].copy()
-    if gdf_tiles_filtered.empty:
-        logger.warning("No tiles intersect with bboxes. Nothing to do.")
-        return
+    logger.info(
+        "Tile split: train=%d val=%d test=%d (available=%d)",
+        len(train_tiles), len(val_tiles), len(test_tiles), len(set(gdf_tiles[tile_id_col].tolist()))
+    )
 
-    # split by tile_id
-    tile_ids = gdf_tiles_filtered[tile_id_col].astype(str).tolist()
-    train_list = _read_lines(train_tiles_txt)
-    val_list = _read_lines(val_tiles_txt)
-    train_tiles, val_tiles = make_tile_split(tile_ids, val_frac=val_frac, seed=seed, train_list=train_list, val_list=val_list)
-    logger.info("Tile split: train=%d val=%d test=%d (total=%d)", len(train_tiles), len(val_tiles), len(test_tiles),len(tile_ids))
+    # optional: subtile whitelist sets
+    subtile_train = subtile_val = subtile_test = None
+    if subtile_split_table:
+        st_tr, st_va, st_te = load_subtile_split_table(subtile_split_table)
+        subtile_train, subtile_val, subtile_test = st_tr, st_va, st_te
+        logger.info(
+            "Subtile filter enabled: train=%d val=%d test=%d",
+            len(subtile_train), len(subtile_val), len(subtile_test)
+        )
 
-    # We still use ImageDataSet to do chip+label writing.
-    # Best: if ImageDataSet supports output_dir per call, pass train/val dir.
-    # If not, you can:
-    #   - instantiate 2 datasets (one for train, one for val)
-    #   - each writes into its own out_root/images/train etc.
-    ds_train = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap)
-    ds_val = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap)
+    # process only tiles that are in any split
+    allowed_tiles = train_tiles | val_tiles | test_tiles
+    gdf_tiles = gdf_tiles[gdf_tiles[tile_id_col].astype(str).isin(allowed_tiles)].copy()
 
-    # IMPORTANT:
-    # This assumes your ImageDataSet writes into:
-    #   output_dir/images and output_dir/labels
-    # If your implementation is different, adjust the folder names inside ImageDataSet (recommended),
-    # OR implement ds.set_split("train"/"val").
-    #
-    # To keep this script generic, we set an attribute if ImageDataSet supports it.
-    if hasattr(ds_train, "split"):
-        ds_train.split = "train"
-    if hasattr(ds_val, "split"):
-        ds_val.split = "val"
+    # one writer per split (your new ImageDataSet supports split + whitelist)
+    ds_train = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap, split="train")
+    ds_val = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap, split="val")
+    ds_test = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap, split="test")
 
-    logger.info("Processing %d tiles for detection dataset...", len(gdf_tiles_filtered))
-
-    for _, row in tqdm(gdf_tiles_filtered.iterrows(), total=len(gdf_tiles_filtered), desc="Detection tiles"):
+    for _, row in tqdm(gdf_tiles.iterrows(), total=len(gdf_tiles), desc="YOLO tiles"):
         tile_id = str(row[tile_id_col])
         tile_path = find_tile_raster(images_dir_p, mode, tile_id)
         if not tile_path.exists():
             logger.warning("Missing tile raster: %s (skipping)", tile_path)
             continue
 
-        if tile_id in val_tiles:
-            ds_val.split_tiff_to_tiles(tile_path, gdf_tree, split="val") if "split" in ds_val.split_tiff_to_tiles.__code__.co_varnames else ds_val.split_tiff_to_tiles(tile_path, gdf_tree)
+        # per-tile label selection
+        tile_labels = gdf_boxes
+        if tile_id_col in gdf_boxes.columns:
+            tile_labels = gdf_boxes[gdf_boxes[tile_id_col].astype(str) == tile_id]
         else:
-            ds_train.split_tiff_to_tiles(tile_path, gdf_tree, split="train") if "split" in ds_train.split_tiff_to_tiles.__code__.co_varnames else ds_train.split_tiff_to_tiles(tile_path, gdf_tree)
+            try:
+                tile_labels = gdf_boxes[gdf_boxes.intersects(row.geometry)]
+            except Exception:
+                pass
 
-    logger.info("✅ Detection dataset written to: %s", out_root)
-    logger.info("Expected YOLO folders: %s", out_root / "images")
+        if (tile_labels is None or len(tile_labels) == 0) and not include_empty_tiles:
+            continue
+
+        if tile_id in test_tiles:
+            ds_test.split_tiff_to_tiles(
+                tile_path,
+                tile_labels,
+                split="test",
+                subtile_whitelist=subtile_test,
+                write_empty_labels=True,
+            )
+        elif tile_id in val_tiles:
+            ds_val.split_tiff_to_tiles(
+                tile_path,
+                tile_labels,
+                split="val",
+                subtile_whitelist=subtile_val,
+                write_empty_labels=True,
+            )
+        else:
+            ds_train.split_tiff_to_tiles(
+                tile_path,
+                tile_labels,
+                split="train",
+                subtile_whitelist=subtile_train,
+                write_empty_labels=True,
+            )
+
+    logger.info("✅ YOLO detection dataset written to: %s", out_root)
+    logger.info("   images/: %s", out_root / "images")
+    logger.info("   labels/: %s", out_root / "labels")
 
 
-# -----------------------------
-# 2) Classification patches
-# -----------------------------
+# -----------------------------------------------------------------------------
+# 2) Classification patches dataset
+# -----------------------------------------------------------------------------
 def make_classification_patches(
     *,
     tiles_gpkg: str,
@@ -255,24 +374,25 @@ def make_classification_patches(
     images_dir: str,
     output_dir: str,
     mode: str,
-    patch_size: int = 128,
-    tile_id_col: str = "tile_id",
-    class_col: str = "training_class",
-    id_col: str = "uuid",
-    val_frac: float = 0.2,
-    seed: int = 42,
-    train_tiles_txt: Optional[str] = None,
-    val_tiles_txt: Optional[str] = None,
+    patch_size: int,
+    tile_id_col: str,
+    class_col: str,
+    id_col: str,
+    tile_split_table: Optional[str],
+    val_frac: float,
+    test_frac: float,
+    seed: int,
 ) -> None:
-    """
-    Extract patches around labeled trees into:
-      <out>/patches_<mode>_<patch>/train/<class_name>/*.tif
-      <out>/patches_<mode>_<patch>/val/<class_name>/*.tif
-    """
+    if patch_size % 2 != 0:
+        raise ValueError("--patch-size must be even for centered windows.")
+
     images_dir_p = Path(images_dir)
+    if not images_dir_p.exists():
+        raise FileNotFoundError(images_dir_p)
+
     out_root = Path(output_dir) / f"patches_{mode}_{patch_size}"
-    (out_root / "train").mkdir(parents=True, exist_ok=True)
-    (out_root / "val").mkdir(parents=True, exist_ok=True)
+    for split in ("train", "val", "test"):
+        (out_root / split).mkdir(parents=True, exist_ok=True)
 
     gdf_tiles = gpd.read_file(tiles_gpkg)
     gdf_tree = gpd.read_file(genus_labels_gpkg)
@@ -282,43 +402,55 @@ def make_classification_patches(
     if gdf_tree.empty:
         raise ValueError(f"No genus labels found in {genus_labels_gpkg}")
     if class_col not in gdf_tree.columns:
-        raise ValueError(f"genus_labels_gpkg is missing class column '{class_col}'")
+        raise ValueError(f"Labels file missing class column '{class_col}'")
 
     gdf_tiles, gdf_tree = ensure_same_crs(gdf_tiles, gdf_tree)
-    gdf_tiles = _ensure_tile_id_column(gdf_tiles, tile_id_col)
+    gdf_tiles = ensure_tile_id_column(gdf_tiles, tile_id_col=tile_id_col, prefer_dop_kachel=True)
 
-    # Points for join
-    gdf_tree = gdf_tree.copy()
-    gdf_tree["__pt__"] = gdf_tree.geometry.centroid
+    train_tiles, val_tiles, test_tiles = build_split_sets(
+        gdf_tiles=gdf_tiles,
+        tile_id_col=tile_id_col,
+        tile_split_table=tile_split_table,
+        val_frac=val_frac,
+        test_frac=test_frac,
+        seed=seed,
+    )
 
-    half = int(patch_size // 2)
+    logger.info("Tile split (patches): train=%d val=%d test=%d", len(train_tiles), len(val_tiles), len(test_tiles))
+
+    # Join each tree instance to its parent tile
+    trees = gdf_tree.copy()
+    if trees.geometry.geom_type.isin(["Polygon", "MultiPolygon"]).any():
+        trees["__pt__"] = trees.geometry.centroid
+    else:
+        trees["__pt__"] = trees.geometry
 
     pts_cols = [class_col]
-    if id_col in gdf_tree.columns:
+    if id_col in trees.columns:
         pts_cols.append(id_col)
 
-    pts = gpd.GeoDataFrame(gdf_tree[pts_cols].copy(), geometry=gdf_tree["__pt__"], crs=gdf_tree.crs)
+    pts = gpd.GeoDataFrame(trees[pts_cols].copy(), geometry=trees["__pt__"], crs=trees.crs)
     joined = gpd.sjoin(pts, gdf_tiles[[tile_id_col, "geometry"]], how="left", predicate="within")
 
-    missing = joined[tile_id_col].isna().sum()
+    half = patch_size // 2
+    missing = int(joined[tile_id_col].isna().sum())
     if missing > 0:
-        logger.info("Points not matched to any tile: %d (they will be skipped)", int(missing))
+        logger.warning("Tree points not matched to any tile: %d (skipping)", missing)
 
-    # split by tile_id (only among tiles that actually have matched points)
-    matched_tile_ids = joined[tile_id_col].dropna().astype(str).unique().tolist()
-    train_list = _read_lines(train_tiles_txt)
-    val_list = _read_lines(val_tiles_txt)
-    train_tiles, val_tiles = make_tile_split(matched_tile_ids, val_frac=val_frac, seed=seed, train_list=train_list, val_list=val_list)
-    logger.info("Tile split (classification): train=%d val=%d (matched tiles=%d)", len(train_tiles), len(val_tiles), len(matched_tile_ids))
-
-    # iterate points
-    for idx, row in tqdm(joined.iterrows(), total=len(joined), desc="Classification patches"):
+    for idx, row in tqdm(joined.iterrows(), total=len(joined), desc="Genus patches"):
         tile_id = row.get(tile_id_col, None)
         if tile_id is None or (isinstance(tile_id, float) and np.isnan(tile_id)):
             continue
         tile_id = str(tile_id)
 
-        split = "val" if tile_id in val_tiles else "train"
+        if tile_id in test_tiles:
+            split = "test"
+        elif tile_id in val_tiles:
+            split = "val"
+        elif tile_id in train_tiles:
+            split = "train"
+        else:
+            continue
 
         class_name = str(row.get(class_col, "unknown")).strip().replace(" ", "_")
         out_id = row.get(id_col, idx) if id_col in row else idx
@@ -362,43 +494,49 @@ def make_classification_patches(
     logger.info("✅ Classification patches written to: %s", out_root)
 
 
-# -----------------------------
+# -----------------------------------------------------------------------------
 # CLI
-# -----------------------------
+# -----------------------------------------------------------------------------
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Generate training datasets: YOLO detection + classification patches.")
+    ap = argparse.ArgumentParser(description="Build datasets: YOLO detection + genus patches (tile-level splits).")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    # Shared split knobs
-    def add_split_args(p: argparse.ArgumentParser):
-        p.add_argument("--val-frac", type=float, default=0.2)
+    def add_split_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--tile-split-table", default=None, help="CSV/TXT/TSV with columns tile_id,split (train|val|test)")
+        p.add_argument("--val-frac", type=float, default=0.2, help="Used only if --tile-split-table is not provided")
+        p.add_argument("--test-frac", type=float, default=0.1, help="Used only if --tile-split-table is not provided")
         p.add_argument("--seed", type=int, default=42)
-        p.add_argument("--train-tiles", default=None, help="Optional text file listing train tile_ids (one per line)")
-        p.add_argument("--val-tiles", default=None, help="Optional text file listing val tile_ids (one per line)")
 
     # Detection
-    ap_det = sub.add_parser("det", help="Generate YOLO detection dataset from weak bbox labels")
+    ap_det = sub.add_parser("det", help="Generate YOLO detection dataset from bbox labels")
     ap_det.add_argument("--tiles-gpkg", required=True)
-    ap_det.add_argument("--weak-bboxes-gpkg", required=True)
-    ap_det.add_argument("--images-dir", required=True, help="Directory containing tiles")
+    ap_det.add_argument("--bboxes-gpkg", required=True)
+    ap_det.add_argument("--images-dir", required=True, help="Directory with parent tile rasters: <mode>_<tile_id>.tif")
     ap_det.add_argument("--output-dir", required=True)
-    ap_det.add_argument("--mode", required=True, help="Tile prefix in filenames, e.g. rgbih, rgbi, rgb")
-    ap_det.add_argument("--tile-id-col", default="tile_id", help="Tile id column in tiles/bboxes gpkg (fallback)")
+    ap_det.add_argument("--mode", required=True, help="e.g. rgbih (expects rgbih_<tile_id>.tif)")
+    ap_det.add_argument("--tile-id-col", default="tile_id")
     ap_det.add_argument("--size", type=int, default=640)
-    ap_det.add_argument("--overlap", type=float, default=0.0)
+    ap_det.add_argument("--overlap", type=float, default=0.2)
+    ap_det.add_argument("--include-empty-tiles", dest="include_empty_tiles", action="store_true", default=True)
+    ap_det.add_argument("--no-empty-tiles", dest="include_empty_tiles", action="store_false")
+    ap_det.add_argument(
+        "--subtile-split-table",
+        default=None,
+        help="Optional CSV/TXT/TSV with columns subtile_id,split to keep only specific chips",
+    )
     add_split_args(ap_det)
 
-    # Classification
-    ap_cls = sub.add_parser("patches", help="Generate classification patches from genus labels")
+    # Classification patches
+    ap_cls = sub.add_parser("cls", help="Generate genus classification patches")
     ap_cls.add_argument("--tiles-gpkg", required=True)
     ap_cls.add_argument("--genus-labels-gpkg", required=True)
-    ap_cls.add_argument("--images-dir", required=True, help="Directory containing tiles")
+    ap_cls.add_argument("--images-dir", required=True)
     ap_cls.add_argument("--output-dir", required=True)
-    ap_cls.add_argument("--mode", required=True, help="Tile prefix in filenames, e.g. rgbih, rgbi, rgb")
+    ap_cls.add_argument("--mode", required=True)
     ap_cls.add_argument("--patch-size", type=int, default=128)
-    ap_cls.add_argument("--tile-id-col", default="tile_id", help="Column in tiles.gpkg or derived from dop_kachel")
-    ap_cls.add_argument("--class-col", default="training_class")
-    ap_cls.add_argument("--id-col", default="uuid")
+    ap_cls.add_argument("--tile-id-col", default="tile_id")
+    ap_cls.add_argument("--class-col", default="genus")
+    ap_cls.add_argument("--id-col", default="tree_id")
     add_split_args(ap_cls)
 
     args = ap.parse_args()
@@ -406,19 +544,21 @@ def main() -> None:
     if args.cmd == "det":
         make_detection_dataset(
             tiles_gpkg=args.tiles_gpkg,
-            weak_bboxes_gpkg=args.weak_bboxes_gpkg,
+            bboxes_gpkg=args.bboxes_gpkg,
             images_dir=args.images_dir,
             output_dir=args.output_dir,
             mode=args.mode,
             tile_id_col=args.tile_id_col,
             size=args.size,
             overlap=args.overlap,
+            tile_split_table=args.tile_split_table,
+            subtile_split_table=args.subtile_split_table,
             val_frac=args.val_frac,
+            test_frac=args.test_frac,
             seed=args.seed,
-            train_tiles_txt=args.train_tiles,
-            val_tiles_txt=args.val_tiles,
+            include_empty_tiles=args.include_empty_tiles,
         )
-    elif args.cmd == "patches":
+    elif args.cmd == "cls":
         make_classification_patches(
             tiles_gpkg=args.tiles_gpkg,
             genus_labels_gpkg=args.genus_labels_gpkg,
@@ -429,12 +569,13 @@ def main() -> None:
             tile_id_col=args.tile_id_col,
             class_col=args.class_col,
             id_col=args.id_col,
+            tile_split_table=args.tile_split_table,
             val_frac=args.val_frac,
+            test_frac=args.test_frac,
             seed=args.seed,
-            train_tiles_txt=args.train_tiles,
-            val_tiles_txt=args.val_tiles,
         )
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
     main()
