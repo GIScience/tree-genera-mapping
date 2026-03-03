@@ -350,7 +350,7 @@ def make_detection_dataset(
                 tile_labels,
                 split="test",
                 subtile_whitelist=subtile_test,
-                write_empty_labels=True,
+                write_empty_labels=include_empty_tiles,
             )
         elif tile_id in val_tiles:
             ds_val.split_tiff_to_tiles(
@@ -358,7 +358,7 @@ def make_detection_dataset(
                 tile_labels,
                 split="val",
                 subtile_whitelist=subtile_val,
-                write_empty_labels=True,
+                write_empty_labels=include_empty_tiles,
             )
         else:
             ds_train.split_tiff_to_tiles(
@@ -366,7 +366,7 @@ def make_detection_dataset(
                 tile_labels,
                 split="train",
                 subtile_whitelist=subtile_train,
-                write_empty_labels=True,
+                write_empty_labels=include_empty_tiles,
             )
 
     logger.info("✅ YOLO detection dataset written to: %s", out_root)
@@ -527,7 +527,7 @@ def main() -> None:
     ap_det.add_argument("--tile-id-col", default="tile_id")
     ap_det.add_argument("--label-col", default='genus',
                     help="Column in bboxes_gpkg containing class id (e.g. genus, top1_class)")
-    ap_det.add_argument("--genus-map", default=None, help="Path to Genus Map")
+    ap_det.add_argument("--classes-scv", default=None, help="CSV mapping (fid,genus)")
     ap_det.add_argument(
         "--unknown-class",
         default="skip",
@@ -582,7 +582,7 @@ def main() -> None:
             seed=args.seed,
             include_empty_tiles=args.include_empty_tiles,
             label_col=args.label_col,
-            classes_csv = args.genus_map,
+            classes_csv=args.classes_csv,
             unknown_class=args.unknown_class,
             unknown_map_to=args.unknown_map_to,
             
