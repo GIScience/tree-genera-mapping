@@ -50,6 +50,8 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
+import cv2
+import ast
 from rasterio.windows import Window
 from tqdm import tqdm
 
@@ -66,6 +68,24 @@ ALLOWED_SPLITS = {"train", "val", "test"}
 # -----------------------------------------------------------------------------
 # helpers
 # -----------------------------------------------------------------------------
+def _parse_bbox(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    if isinstance(v, (tuple, list)) and len(v) == 4:
+        arr = [float(x) for x in v]
+    elif isinstance(v, str):
+        try:
+            arr = list(ast.literal_eval(v))
+        except Exception:
+            return None
+        if len(arr) != 4:
+            return None
+        arr = [float(x) for x in arr]
+    else:
+        return None
+    if any(np.isnan(x) for x in arr):
+        return None
+    return tuple(arr)  # (minx, miny, maxx, maxy)
 def ensure_same_crs(
     a: gpd.GeoDataFrame, b: gpd.GeoDataFrame
 ) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
@@ -380,14 +400,19 @@ def make_detection_dataset(
 def make_classification_patches(
     *,
     tiles_gpkg: str,
-    genus_labels_gpkg: str,
+    genus_labels_csv: str,          # <-- CSV instead of GPKG
     images_dir: str,
     output_dir: str,
     mode: str,
     patch_size: int,
-    tile_id_col: str,
-    class_col: str,
-    id_col: str,
+    tile_id_col: str,               # column name in tiles gpkg (tile_id)
+    labels_tile_col: str,           # column name in CSV for tile id (tel_id)
+    class_col: str,                 # genus
+    id_col: str,                    # tree_id
+    x_col: str,                     # X
+    y_col: str,                     # Y
+    bbox_col: Optional[str],        # bbox
+    crop_mode: str,                 # fixed|bbox
     tile_split_table: Optional[str],
     val_frac: float,
     test_frac: float,
@@ -395,28 +420,30 @@ def make_classification_patches(
 ) -> None:
     if patch_size % 2 != 0:
         raise ValueError("--patch-size must be even for centered windows.")
+    if crop_mode not in {"fixed", "bbox"}:
+        raise ValueError("--crop-mode must be fixed|bbox")
 
     images_dir_p = Path(images_dir)
     if not images_dir_p.exists():
         raise FileNotFoundError(images_dir_p)
 
-    out_root = Path(output_dir) / f"patches_{mode}_{patch_size}"
+    out_root = Path(output_dir) / f"patches_{mode}_{patch_size}_{crop_mode}"
     for split in ("train", "val", "test"):
         (out_root / split).mkdir(parents=True, exist_ok=True)
 
+    # tiles (only needed to list available tile_ids + CRS sanity)
     gdf_tiles = gpd.read_file(tiles_gpkg)
-    gdf_tree = gpd.read_file(genus_labels_gpkg)
-
     if gdf_tiles.empty:
         raise ValueError(f"No tiles found in {tiles_gpkg}")
-    if gdf_tree.empty:
-        raise ValueError(f"No genus labels found in {genus_labels_gpkg}")
-    if class_col not in gdf_tree.columns:
-        raise ValueError(f"Labels file missing class column '{class_col}'")
-
-    gdf_tiles, gdf_tree = ensure_same_crs(gdf_tiles, gdf_tree)
     gdf_tiles = ensure_tile_id_column(gdf_tiles, tile_id_col=tile_id_col, prefer_dop_kachel=True)
 
+    # labels CSV
+    df = pd.read_csv(genus_labels_csv)
+    for c in [labels_tile_col, class_col, id_col, x_col, y_col]:
+        if c not in df.columns:
+            raise ValueError(f"CSV missing required column: {c}")
+
+    # build tile split sets (train/val/test tile IDs)
     train_tiles, val_tiles, test_tiles = build_split_sets(
         gdf_tiles=gdf_tiles,
         tile_id_col=tile_id_col,
@@ -425,34 +452,13 @@ def make_classification_patches(
         test_frac=test_frac,
         seed=seed,
     )
-
     logger.info("Tile split (patches): train=%d val=%d test=%d", len(train_tiles), len(val_tiles), len(test_tiles))
 
-    # Join each tree instance to its parent tile
-    trees = gdf_tree.copy()
-    if trees.geometry.geom_type.isin(["Polygon", "MultiPolygon"]).any():
-        trees["__pt__"] = trees.geometry.centroid
-    else:
-        trees["__pt__"] = trees.geometry
-
-    pts_cols = [class_col]
-    if id_col in trees.columns:
-        pts_cols.append(id_col)
-
-    pts = gpd.GeoDataFrame(trees[pts_cols].copy(), geometry=trees["__pt__"], crs=trees.crs)
-    joined = gpd.sjoin(pts, gdf_tiles[[tile_id_col, "geometry"]], how="left", predicate="within")
-
     half = patch_size // 2
-    missing = int(joined[tile_id_col].isna().sum())
-    if missing > 0:
-        logger.warning("Tree points not matched to any tile: %d (skipping)", missing)
 
-    for idx, row in tqdm(joined.iterrows(), total=len(joined), desc="Genus patches"):
-        tile_id = row.get(tile_id_col, None)
-        if tile_id is None or (isinstance(tile_id, float) and np.isnan(tile_id)):
-            continue
-        tile_id = str(tile_id)
-
+    # iterate labels
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Genus patches"):
+        tile_id = str(row[labels_tile_col]).strip()
         if tile_id in test_tiles:
             split = "test"
         elif tile_id in val_tiles:
@@ -462,8 +468,8 @@ def make_classification_patches(
         else:
             continue
 
-        class_name = str(row.get(class_col, "unknown")).strip().replace(" ", "_")
-        out_id = row.get(id_col, idx) if id_col in row else idx
+        class_name = str(row[class_col]).strip().replace(" ", "_")
+        out_id = str(row[id_col])
 
         tile_path = find_tile_raster(images_dir_p, mode, tile_id)
         if not tile_path.exists():
@@ -471,29 +477,58 @@ def make_classification_patches(
 
         class_dir = out_root / split / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
-
         patch_path = class_dir / f"{out_id}.tif"
         if patch_path.exists():
             continue
 
-        pt = row.geometry
-        if pt is None or pt.is_empty:
-            continue
-
         try:
             with rasterio.open(tile_path) as src:
-                r, c = src.index(pt.x, pt.y)
-                win = Window(c - half, r - half, patch_size, patch_size)
+                if crop_mode == "fixed":
+                    x = float(row[x_col]); y = float(row[y_col])
+                    r, c = src.index(x, y)
+                    win = Window(c - half, r - half, patch_size, patch_size)
 
-                if win.col_off < 0 or win.row_off < 0:
-                    continue
-                if (win.col_off + win.width > src.width) or (win.row_off + win.height > src.height):
-                    continue
+                    if (win.col_off < 0 or win.row_off < 0 or
+                        win.col_off + win.width > src.width or
+                        win.row_off + win.height > src.height):
+                        continue
 
-                patch = src.read(window=win)
-                transform = src.window_transform(win)
-                meta = src.meta.copy()
-                meta.update(height=patch.shape[1], width=patch.shape[2], transform=transform)
+                    patch = src.read(window=win)
+                    transform = src.window_transform(win)
+                    meta = src.meta.copy()
+                    meta.update(height=patch.shape[1], width=patch.shape[2], transform=transform)
+
+                else:  # bbox mode
+                    if not bbox_col or bbox_col not in df.columns:
+                        raise ValueError("bbox mode needs --bbox-col pointing to a bbox column in CSV")
+
+                    bb = _parse_bbox(row[bbox_col])
+                    if bb is None:
+                        continue
+                    minx, miny, maxx, maxy = bb
+
+                    # build window from bounds
+                    win = rasterio.windows.from_bounds(minx, miny, maxx, maxy, transform=src.transform)
+                    win = win.round_offsets().round_shape()
+
+                    if (win.col_off < 0 or win.row_off < 0 or
+                        win.col_off + win.width > src.width or
+                        win.row_off + win.height > src.height):
+                        continue
+
+                    patch = src.read(window=win)
+
+                    # resize to patch_size for resnet input
+                    import cv2
+                    patch = np.stack(
+                        [cv2.resize(b, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR) for b in patch]
+                    )
+
+                    meta = src.meta.copy()
+                    meta.update(height=patch_size, width=patch_size)
+                    # transform no longer meaningful after resize; keep original or set identity
+                    # We'll keep src.transform to avoid writing invalid CRS metadata.
+                    # (If you need correct transform, you can compute it.)
 
                 with rasterio.open(patch_path, "w", **meta) as dst:
                     dst.write(patch)
@@ -553,14 +588,18 @@ def main() -> None:
     # Classification patches
     ap_cls = sub.add_parser("cls", help="Generate genus classification patches")
     ap_cls.add_argument("--tiles-gpkg", required=True)
-    ap_cls.add_argument("--genus-labels-gpkg", required=True)
+    ap_cls.add_argument("--genus-labels-csv", required=True)
     ap_cls.add_argument("--images-dir", required=True)
     ap_cls.add_argument("--output-dir", required=True)
     ap_cls.add_argument("--mode", required=True)
-    ap_cls.add_argument("--patch-size", type=int, default=128)
-    ap_cls.add_argument("--tile-id-col", default="tile_id")
     ap_cls.add_argument("--class-col", default="genus")
-    ap_cls.add_argument("--id-col", default="tree_id")
+    ap_cls.add_argument("--tile-id-col", default="tile_id")  # in tiles gpkg    # in CSV
+    ap_cls.add_argument("--labels-tile-col", default="tile_id")
+    ap_cls.add_argument("--x-col", default="X")
+    ap_cls.add_argument("--y-col", default="Y")
+    ap_cls.add_argument("--bbox-col", default="bbox")
+    ap_cls.add_argument("--patch-size", type=int, default=128)
+    ap_cls.add_argument("--crop-mode", default="fixed", choices=["fixed", "bbox"])
     add_split_args(ap_cls)
 
     args = ap.parse_args()
@@ -590,14 +629,19 @@ def main() -> None:
     elif args.cmd == "cls":
         make_classification_patches(
             tiles_gpkg=args.tiles_gpkg,
-            genus_labels_gpkg=args.genus_labels_gpkg,
+            genus_labels_csv=args.genus_labels_csv,
             images_dir=args.images_dir,
             output_dir=args.output_dir,
             mode=args.mode,
             patch_size=args.patch_size,
             tile_id_col=args.tile_id_col,
+            labels_tile_col=args.labels_tile_col,
             class_col=args.class_col,
             id_col=args.id_col,
+            x_col=args.x_col,
+            y_col=args.y_col,
+            bbox_col=args.bbox_col,
+            crop_mode=args.crop_mode,
             tile_split_table=args.tile_split_table,
             val_frac=args.val_frac,
             test_frac=args.test_frac,
