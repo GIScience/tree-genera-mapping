@@ -2,7 +2,7 @@
 
 This directory contains the **reference spatial grid** used by the project.
 
-## tiles.gpkg
+## lgl_bw_tiles.gpkg
 
 `tiles.gpkg` defines the complete set of spatial grid tiles and their
 unique identifiers used throughout the pipeline.
@@ -11,7 +11,7 @@ unique identifiers used throughout the pipeline.
 - Tile IDs are assumed to be stable and consistent
 - Used for training, inference, and post-processing
 
-## Data provenance
+### Data provenance
 
 The grid tiles correspond to the **LGL UrbanGreen tiling scheme** and are
 associated with the mapping of urban green spaces from multispectral
@@ -28,8 +28,19 @@ Using this portal, users can download **1 × 1 km tiles** of:
 These datasets are intended to be aligned with the grid defined in
 `tiles.gpkg`.
 
-## Notes
+### Notes
 
 - The file (~14 MB) is intentionally included in the repository to ensure
   reproducibility.
 - Coordinate reference system (CRS): `EPSG:25832`
+
+## tiles_split.txt
+
+Split file to tiles
+
+##  *_subtiles_640_20.txt
+
+Three TXT files with the list of subtiles for train/validation dataset
+
+## samples
+Raster `.tif` files for demo purpose.
