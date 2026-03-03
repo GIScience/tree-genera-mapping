@@ -55,7 +55,7 @@ from tqdm import tqdm
 
 
 from tree_genera_mapping.preprocess.detection_dataset import ImageDataSet
-from tree_genera_mapping.misc.tile_partition import dopkachel_to_tile_id, ensure_tile_id_from_grid
+from tree_genera_mapping.utils.tile_partition import dopkachel_to_tile_id, ensure_tile_id_from_grid
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -258,6 +258,10 @@ def make_detection_dataset(
     test_frac: float,
     seed: int,
     include_empty_tiles: bool,
+    label_col: Optional[str],
+    classes_csv: Optional[str],
+    unknown_class: str,
+    unknown_map_to: str,
 ) -> None:
     _validate_overlap(overlap)
 
@@ -310,9 +314,15 @@ def make_detection_dataset(
     gdf_tiles = gdf_tiles[gdf_tiles[tile_id_col].astype(str).isin(allowed_tiles)].copy()
 
     # one writer per split (your new ImageDataSet supports split + whitelist)
-    ds_train = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap, split="train")
-    ds_val = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap, split="val")
-    ds_test = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, mode=mode, size=size, overlap=overlap, split="test")
+    ds_train = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col, mode=mode, size=size, overlap=overlap, split="train", classes_csv=classes_csv,
+    unknown_class=unknown_class,
+    unknown_map_to=unknown_map_to,)
+    ds_val = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode, size=size, overlap=overlap, split="val", classes_csv=classes_csv,
+    unknown_class=unknown_class,
+    unknown_map_to=unknown_map_to,)
+    ds_test = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode, size=size, overlap=overlap, split="test", classes_csv=classes_csv,
+    unknown_class=unknown_class,
+    unknown_map_to=unknown_map_to,)
 
     for _, row in tqdm(gdf_tiles.iterrows(), total=len(gdf_tiles), desc="YOLO tiles"):
         tile_id = str(row[tile_id_col])
@@ -515,6 +525,20 @@ def main() -> None:
     ap_det.add_argument("--output-dir", required=True)
     ap_det.add_argument("--mode", required=True, help="e.g. rgbih (expects rgbih_<tile_id>.tif)")
     ap_det.add_argument("--tile-id-col", default="tile_id")
+    ap_det.add_argument("--label-col", default='genus',
+                    help="Column in bboxes_gpkg containing class id (e.g. genus, top1_class)")
+    ap_det.add_argument("--genus-map", default=None, help="Path to Genus Map")
+    ap_det.add_argument(
+        "--unknown-class",
+        default="skip",
+        choices=["skip", "map"],
+        help="What to do if label not found in mapping",
+    )
+    ap_det.add_argument(
+        "--unknown-map-to",
+        default="Other Deciduous",
+        help="Target class name if unknown-class=map",
+    )
     ap_det.add_argument("--size", type=int, default=640)
     ap_det.add_argument("--overlap", type=float, default=0.2)
     ap_det.add_argument("--include-empty-tiles", dest="include_empty_tiles", action="store_true", default=True)
@@ -557,6 +581,11 @@ def main() -> None:
             test_frac=args.test_frac,
             seed=args.seed,
             include_empty_tiles=args.include_empty_tiles,
+            label_col=args.label_col,
+            classes_csv = args.genus_map,
+            unknown_class=args.unknown_class,
+            unknown_map_to=args.unknown_map_to,
+            
         )
     elif args.cmd == "cls":
         make_classification_patches(

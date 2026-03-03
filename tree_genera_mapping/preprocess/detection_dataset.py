@@ -1,10 +1,9 @@
 """
-dataset.py
+detection_dataset.py
 
 Utilities to:
 1) Split GeoTIFF tiles into fixed-size sub-tiles (e.g., 640x640)
 2) Generate YOLO-format labels (.txt) from vector geometries (bbox polygons recommended)
-3) Optionally cut a patch from a mosaic of overlapping rasters
 
 Assumptions:
 - Training geometries should be polygons (bbox polygons for YOLO are ideal).
@@ -15,18 +14,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Iterable, List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import geopandas as gpd
+import pandas as pd
 import rasterio
 from rasterio.merge import merge as merge_tiles
 from rasterio.windows import Window
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
-# -----------------------------
-# LOGGING
-# -----------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -50,6 +47,9 @@ class ImageDataSet:
         size: int = 640,
         overlap: float = 0.0,
         split: str = "train",  # train|val|test
+        classes_csv: Optional[str | Path] = None,  # CSV with columns: fid, genus
+        unknown_class: str = "skip",  # "skip" | "map"
+        unknown_map_to: str = "Other Deciduous",  # used only if unknown_class == "map"
     ):
         self.img_dir = Path(img_dir)
         self.output_dir = Path(output_dir)
@@ -59,8 +59,24 @@ class ImageDataSet:
         self.mode = mode
         self.overlap = overlap
         self.size = size
+        self.split = self._validate_split(split)
 
-        self.split = split  # default split if not overridden per call
+        # Optional genus -> fid mapping (for string labels)
+        self.class_map: Optional[Dict[str, int]] = None
+        self.unknown_class = str(unknown_class).strip().lower()
+        self.unknown_map_to = str(unknown_map_to).strip()
+
+        if classes_csv is not None:
+            self.class_map = self._load_class_map(classes_csv)
+
+            if self.unknown_class not in {"skip", "map"}:
+                raise ValueError("unknown_class must be 'skip' or 'map'")
+
+            if self.unknown_class == "map" and self.unknown_map_to not in self.class_map:
+                raise ValueError(
+                    f"unknown_map_to='{self.unknown_map_to}' not found in classes_csv. "
+                    f"Available examples: {list(self.class_map.keys())[:5]}"
+                )
 
     def __len__(self) -> int:
         tif_files = list(self.img_dir.glob(f"**/{self.mode}_*.tif"))
@@ -86,6 +102,56 @@ class ImageDataSet:
             raise ValueError(f"Unexpected chip stem: {chip_stem}")
         return "_".join(parts[1:])
 
+    @staticmethod
+    def _load_class_map(classes_csv: str | Path) -> Dict[str, int]:
+        """
+        classes_csv must have columns: fid, genus
+        Returns mapping: genus(str) -> fid(int)
+        """
+        p = Path(classes_csv)
+        if not p.exists():
+            raise FileNotFoundError(p)
+
+        df = pd.read_csv(p)
+        if "fid" not in df.columns or "genus" not in df.columns:
+            raise ValueError(f"{p} must contain columns: fid, genus")
+
+        df = df.dropna(subset=["fid", "genus"]).copy()
+        df["genus"] = df["genus"].astype(str).str.strip()
+        df["fid"] = df["fid"].astype(int)
+
+        m = dict(zip(df["genus"], df["fid"]))
+        if len(m) == 0:
+            raise ValueError(f"Loaded empty class map from {p}")
+        return m
+
+    def _label_value_to_id(self, v) -> Optional[int]:
+        """
+        Convert label value from row[label_col] into an int class id.
+        - If no mapping loaded: expects v is already int-like.
+        - If mapping loaded: expects v is a genus string.
+        """
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+
+        # If we have no map, assume numeric column already
+        if self.class_map is None:
+            try:
+                return int(v)
+            except Exception:
+                return None
+
+        # Map from genus string
+        name = str(v).strip()
+        if name in self.class_map:
+            return int(self.class_map[name])
+
+        if self.unknown_class == "map":
+            return int(self.class_map[self.unknown_map_to])
+
+        # skip
+        return None
+
     def split_tiff_to_tiles(
         self,
         image_path: str | Path,
@@ -98,8 +164,6 @@ class ImageDataSet:
         """
         Split one GeoTIFF into sub-tiles and write YOLO label files.
 
-        Parameters
-        ----------
         split:
           Overrides self.split for this call.
         subtile_whitelist:
@@ -161,11 +225,9 @@ class ImageDataSet:
 
                     tile_geom = gpd.GeoSeries([box(*tile_bounds).buffer(0.01)], crs=crs)
 
-                    # chip filename
-                    chip_stem = f"{image_name}_{tile_n}"  # rgbih_32_..._<n>
+                    chip_stem = f"{image_name}_{tile_n}"
                     subtile_id = self._subtile_id_from_chip_stem(chip_stem)
 
-                    # optional filter
                     if subtile_whitelist is not None and subtile_id not in subtile_whitelist:
                         tile_n += 1
                         continue
@@ -181,12 +243,10 @@ class ImageDataSet:
                         }
                     )
 
-                    # write image
                     tile_filename = out_img_dir / f"{chip_stem}.tif"
                     with rasterio.open(tile_filename, "w", **tile_meta) as dst:
                         dst.write(tile_data)
 
-                    # write labels
                     labels = self.extract_labels(trees_gdf, tile_geom, tile_transform)
                     if write_empty_labels or len(labels) > 0:
                         label_filename = out_lbl_dir / f"{chip_stem}.txt"
@@ -201,11 +261,11 @@ class ImageDataSet:
         """
         Convert intersecting geometries to YOLO labels:
           class x_center y_center width height
-        Assumes geometries are polygons/bboxes in same CRS as raster.
+
+        IMPORTANT:
+        - geometries are clipped to the chip polygon so bboxes never exceed chip bounds.
         """
-        if trees_gdf is None:
-            return []
-        if len(trees_gdf) == 0:
+        if trees_gdf is None or len(trees_gdf) == 0:
             return []
         if trees_gdf.crs is None:
             raise ValueError("trees_gdf has no CRS")
@@ -221,28 +281,47 @@ class ImageDataSet:
             if not isinstance(geom, BaseGeometry) or geom.is_empty:
                 continue
 
-            bounds = geom.bounds
+            clipped = geom.intersection(tile_poly)
+            if clipped.is_empty:
+                continue
+
+            xmin, ymin, xmax, ymax = clipped.bounds
+
             try:
-                x_min, y_min = ~transform * (bounds[0], bounds[1])
-                x_max, y_max = ~transform * (bounds[2], bounds[3])
+                x_min, y_min = ~transform * (xmin, ymin)
+                x_max, y_max = ~transform * (xmax, ymax)
             except Exception as e:
                 logger.warning("Transform error: %s", e)
                 continue
 
-            x_center = ((x_min + x_max) / 2) / self.size
-            y_center = ((y_min + y_max) / 2) / self.size
-            width = abs(x_max - x_min) / self.size
-            height = abs(y_max - y_min) / self.size
+            # clamp to chip bounds
+            x_min = max(0.0, min(float(self.size), float(x_min)))
+            x_max = max(0.0, min(float(self.size), float(x_max)))
+            y_min = max(0.0, min(float(self.size), float(y_min)))
+            y_max = max(0.0, min(float(self.size), float(y_max)))
 
-            if 0 <= x_center <= 1 and 0 <= y_center <= 1:
-                label = 0
-                if self.label_col and (self.label_col in row):
-                    try:
-                        label = int(row[self.label_col])
-                    except Exception as e:
-                        logger.warning("Invalid label in '%s': %s", self.label_col, e)
+            if x_max < x_min:
+                x_min, x_max = x_max, x_min
+            if y_max < y_min:
+                y_min, y_max = y_max, y_min
 
-                labels.append(f"{label} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
+            if (x_max - x_min) < 1.0 or (y_max - y_min) < 1.0:
+                continue
+
+            x_center = ((x_min + x_max) / 2.0) / self.size
+            y_center = ((y_min + y_max) / 2.0) / self.size
+            w = (x_max - x_min) / self.size
+            h = (y_max - y_min) / self.size
+
+            # resolve label id
+            label = 0
+            if self.label_col and (self.label_col in row):
+                lab_id = self._label_value_to_id(row[self.label_col])
+                if lab_id is None:
+                    continue
+                label = lab_id
+
+            labels.append(f"{label} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}")
 
         return labels
 
@@ -269,13 +348,7 @@ class ImageDataSet:
             mosaic, out_transform = merge_tiles(srcs)
 
             meta = srcs[0].meta.copy()
-            meta.update(
-                {
-                    "height": mosaic.shape[1],
-                    "width": mosaic.shape[2],
-                    "transform": out_transform,
-                }
-            )
+            meta.update({"height": mosaic.shape[1], "width": mosaic.shape[2], "transform": out_transform})
 
             bounds = geom.bounds
             window = rasterio.windows.from_bounds(*bounds, transform=out_transform)
@@ -289,13 +362,7 @@ class ImageDataSet:
 
             tile_transform = rasterio.windows.transform(window, out_transform)
             tile_meta = meta.copy()
-            tile_meta.update(
-                {
-                    "height": tile_data.shape[1],
-                    "width": tile_data.shape[2],
-                    "transform": tile_transform,
-                }
-            )
+            tile_meta.update({"height": tile_data.shape[1], "width": tile_data.shape[2], "transform": tile_transform})
 
             tile_filename = class_dir / f"tree_{output_id}.tif"
             with rasterio.open(tile_filename, "w", **tile_meta) as dst:
