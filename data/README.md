@@ -34,6 +34,10 @@ These datasets are intended to be aligned with the grid defined in
   reproducibility.
 - Coordinate reference system (CRS): `EPSG:25832`
 
+## genera_labels.csv
+
+Mapping genus names into model labels
+
 ## tiles_split.txt
 
 Split file to tiles
