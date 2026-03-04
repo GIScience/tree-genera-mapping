@@ -38,23 +38,31 @@ Create a kernel to run notebooks scripts
 ```bash
 python -m ipykernel install --user --name map-tree-genera --display-name "Python (tree-genera)"
 ```
+Download the pretrained model (5ch) with weights
+```bash
+mkdir -p cache/weights
+cd cache/weights
+wget https://huggingface.co/solo2307/urban-tree-genera/blob/main/yolo11l_tree_genus.pt
+wget https://huggingface.co/solo2307/urban-tree-genera/resolve/main/yolo11l_tree.pt
+cd ../..
+```
 
 How to run the pre-trained YOLOv11l model 5CH imagery
+1. DEMO with Jupyter NOtebook ...
+
+
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
-python scripts/fetch_tiles.py  \
+python tree_genera_mapping/scripts/fetch_tiles.py  \
  --tile-id 32_355_6048
 ```
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
 ```bash
-python scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
+python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
 ```
 
-
-
 ## Train Model
-
 1. Data Preparation
 
    i. Prepare detection dataset for Genera Mapping
