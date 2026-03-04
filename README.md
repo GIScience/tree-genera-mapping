@@ -50,7 +50,7 @@ cd ../..
 How to run the pre-trained YOLOv11l model 5CH imagery
 1. DEMO with Jupyter NOtebook ...
 
-
+How to run the Genera Mapping scripts
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
 python tree_genera_mapping/scripts/fetch_tiles.py  \
@@ -59,7 +59,7 @@ python tree_genera_mapping/scripts/fetch_tiles.py  \
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
 ```bash
-python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path models/pretrained_yolov11l_tree_genus.pth --output-dir cache/initial_inference
+python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path cache/weights/yolov11l_tree_genus.pth --output-dir cache/initial_inference
 ```
 
 ## Train Model
@@ -102,7 +102,7 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
      --y-col Y \ # only for fixed crop mode 
    ```
    
-2. run code
+2. Run code
 ```bash
     python -m tree_genera_mapping.dl.detection.yolo_train.py
 ```
