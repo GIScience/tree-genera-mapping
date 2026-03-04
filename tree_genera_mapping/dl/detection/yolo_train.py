@@ -3,7 +3,6 @@ import torch.nn as nn
 from ultralytics import YOLO, settings
 import random
 import argparse
-import numpy as np
 
 
 # --------- helpers ------------
@@ -200,7 +199,7 @@ def train(conf):
     # Pick suffix based on num bands
     suffix = {3: "rgb", 4: "rgbi", 5: "rgbih"}.get(conf["num_bands"], "")
     extra_strategies = {4: "red", 5: ["red", "he"]}.get(conf["num_bands"], "")
-    run_name = f"y11l_{suffix}_genus_cbam_{conf['img_size']}"
+    run_name = f"y11l_{suffix}_genus_{conf['img_size']}"
     if conf["restart"]:
         model = YOLO(f"{conf['run_dir']}/detect/{run_name}/weights/best.pt")
     else:
@@ -245,16 +244,16 @@ if __name__ == "__main__":
     # Config
     parser = argparse.ArgumentParser(description="YOLO11 Tree Genus Training")
 
-    parser.add_argument("--num-bands", type=int, default=3,
+    parser.add_argument("--num-bands", type=int, default=5,
                         help="Number of input bands (3=RGB, 4=RGB+NIR, 5=RGB+NIR+Height)")
     parser.add_argument("--img-size", type=int, default=640, help="Training image size")
     parser.add_argument("--epochs", type=int, default=200, help="Number of training epochs")
     parser.add_argument("--batch", type=int, default=16, help="Batch size")
-    parser.add_argument("--data", type=str, required=True, help="Path to dataset YAML")
     parser.add_argument("--base-model", type=str, default="yolo11l.pt", help="Pretrained model path")
     parser.add_argument("--restart", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=False,
                         help="Restart from checkpoint?")
-    parser.add_argument("--run-dir", type=str, required=True, help="Directory for YOLO runs")
+    parser.add_argument("--run-dir", type=str, default="cache/runs", help="Directory for YOLO runs")
+    parser.add_argument("--data", type=str, default="cache/data_genera.yaml", help="Path to dataset YAML")
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--eval", type=bool, default=False, help="Evaluate model")
     parser.add_argument("--conf", type=float, default=0.3, help="Confidence level")

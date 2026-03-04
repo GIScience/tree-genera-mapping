@@ -55,24 +55,45 @@ python scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/t
 
 ## Train Model
 
-1. Prepare dataset for Genera Mapping
+1. Data Preparation
+
+   i. Prepare detection dataset for Genera Mapping
+      ```bash
+      python -m tree_genera_mapping.scripts.build_dataset det \
+          --tiles-gpkg /data/lgl_bw_tiles.gpkg \
+          --bboxes-gpkg /../path_to_/pseudo_labels.gpkg \
+          --images-dir /../path_to_tiff_tiles \
+          --output-dir /../path_to_/subtiles_640_20 \
+          --mode rgbih \ 
+          --tile-id-col tile_id \
+          --label-col top1_class \
+          --classes-csv /data/genera_labels.csv  \
+          --unknown-class skip \
+          --size 640 \
+          --overlap 0.2 \
+          --tile-split-table /data/tiles_split.txt  \
+          --subtile-split-table /data/subtiles_split.txt   \
+          --include-empty-tiles
+      ```
+   ii. Classification dataset for Genus Prediction
+
    ```bash
-   python -m tree_genera_mapping.scripts.build_dataset det \
-       --tiles-gpkg /data/lgl_bw_tiles.gpkg \
-       --bboxes-gpkg /../path_to_/pseudo_labels.gpkg \
-       --images-dir /../path_to_tiff_tiles \
-       --output-dir /../path_to_/subtiles_640_20 \
-       --mode rgbih   \ 
-       --tile-id-col tile_id \
-       --label-col top1_class \
-       --classes-csv /data/genera_labels.csv  \
-       --unknown-class skip \
-       --size 640 \
-       --overlap 0.2  \
-       --tile-split-table /data/tiles_split.txt  \
-       --subtile-split-table /data/subtiles_split.txt   \
-       --include-empty-tiles
+    python -m tree_genera_mapping.scripts.build_dataset cls \
+     --tiles-gpkg /data/lgl_bw_tiles.gpkg \
+     --genus-labels-csv /path_to_/GreeHill_TreesGenus.csv \
+     --class-col genus \
+     --images-dir /../path_to_tiff_tiles/ \
+     --output-dir /../path_to_tiff_tiles/genus_patches_fixed128 \
+     --mode rgbih \
+     --patch-size 128 \
+     --labels-tile-col tile_id \
+     --tile-split-table /data/tiles_split.txt
+     --crop-mode fixed \ # bbox or fixed 
+     --bbox-col bbox \ # only for bbox crop mode
+     --x-col X \ # only for fixed crop mode
+     --y-col Y \ # only for fixed crop mode 
    ```
+   
 2. run code
 ```bash
     python -m tree_genera_mapping.dl.detection.yolo_train.py
