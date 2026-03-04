@@ -4,6 +4,7 @@ cache/**
 cache/
 __pycache__/
 *.pyc
+**/*.pth
 
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
