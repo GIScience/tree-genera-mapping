@@ -69,40 +69,45 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
       ```bash
       python -m tree_genera_mapping.scripts.build_dataset det \
           --tiles-gpkg /data/lgl_bw_tiles.gpkg \
-          --bboxes-gpkg /../path_to_/pseudo_labels.gpkg \
-          --images-dir /../path_to_tiff_tiles \
-          --output-dir /../path_to_/subtiles_640_20 \
-          --mode rgbih \ 
+          --bboxes-gpkg path/to/pseudo_labels.gpkg \
+          --images-dir /path/to/tiles_rgbih/ \
+          --output-dir cache/ \
+          --mode rgbih \
           --tile-id-col tile_id \
           --label-col top1_class \
-          --classes-csv /data/genera_labels.csv  \
+          --classes-csv data/genera_labels.csv  \
           --unknown-class skip \
           --size 640 \
           --overlap 0.2 \
-          --tile-split-table /data/tiles_split.txt  \
-          --subtile-split-table /data/subtiles_split.txt   \
-          --include-empty-tiles
+          --tile-split-table data/tiles_split.txt  \
+          --subtile-split-table data/subtiles_split.txt   \
+          --include-empty-tiles \
+          --plain-tiff \ # yolo_train.py only reads TIFF (Non-GeoTIFF)
       ```
+      **Note**: `yolo_train.py` expects plain TIFF images (Non-GeoTIFF). If your source imagery is stored as GeoTIFF, run the dataset builder with the --plain-tiff flag so that geospatial metadata is removed during chip generation.
+
+
+
    ii. Classification dataset for Genus Prediction
 
    ```bash
     python -m tree_genera_mapping.scripts.build_dataset cls \
-     --tiles-gpkg /data/lgl_bw_tiles.gpkg \
-     --genus-labels-csv /path_to_/GreeHill_TreesGenus.csv \
+     --tiles-gpkg data/lgl_bw_tiles.gpkg \
+     --genus-labels-csv path/to/GreeHill_TreesGenus.csv \
      --class-col genus \
-     --images-dir /../path_to_tiff_tiles/ \
-     --output-dir /../path_to_tiff_tiles/genus_patches_fixed128 \
+     --images-dir /path/to/tiles_rgbih/ \
+     --output-dir cache/genus_patches \
      --mode rgbih \
      --patch-size 128 \
      --labels-tile-col tile_id \
-     --tile-split-table /data/tiles_split.txt
+     --tile-split-table data/tiles_split.txt
      --crop-mode fixed \ # bbox or fixed 
      --bbox-col bbox \ # only for bbox crop mode
      --x-col X \ # only for fixed crop mode
      --y-col Y \ # only for fixed crop mode 
    ```
    
-2. Run code
+3. Run code
 ```bash
     python -m tree_genera_mapping.dl.detection.yolo_train.py
 ```
