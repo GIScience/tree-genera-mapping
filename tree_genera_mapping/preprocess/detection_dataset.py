@@ -28,6 +28,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def strip_georef_from_meta(meta: dict) -> dict:
+    meta = meta.copy()
+    for k in ("crs", "transform", "gcps", "rpc"):
+        meta.pop(k, None)
+    return meta
+
 class ImageDataSet:
     """
     Splits a parent GeoTIFF into fixed-size chips and writes YOLO label files.
@@ -50,6 +56,7 @@ class ImageDataSet:
         classes_csv: Optional[str | Path] = None,  # CSV with columns: fid, genus
         unknown_class: str = "skip",  # "skip" | "map"
         unknown_map_to: str = "Other Deciduous",  # used only if unknown_class == "map"
+        plain_tiff: bool = False,
     ):
         self.img_dir = Path(img_dir)
         self.output_dir = Path(output_dir)
@@ -65,6 +72,7 @@ class ImageDataSet:
         self.class_map: Optional[Dict[str, int]] = None
         self.unknown_class = str(unknown_class).strip().lower()
         self.unknown_map_to = str(unknown_map_to).strip()
+        self.plain_tiff = plain_tiff
 
         if classes_csv is not None:
             self.class_map = self._load_class_map(classes_csv)
@@ -81,6 +89,7 @@ class ImageDataSet:
     def __len__(self) -> int:
         tif_files = list(self.img_dir.glob(f"**/{self.mode}_*.tif"))
         return len(tif_files)
+
 
     @staticmethod
     def _validate_split(split: str) -> str:
@@ -242,6 +251,9 @@ class ImageDataSet:
                             "driver": "GTiff",
                         }
                     )
+
+                    if self.plain_tiff:
+                        tile_meta = strip_georef_from_meta(tile_meta)
 
                     tile_filename = out_img_dir / f"{chip_stem}.tif"
                     with rasterio.open(tile_filename, "w", **tile_meta) as dst:

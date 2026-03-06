@@ -68,6 +68,15 @@ ALLOWED_SPLITS = {"train", "val", "test"}
 # -----------------------------------------------------------------------------
 # helpers
 # -----------------------------------------------------------------------------
+def strip_georef_from_meta(meta: dict) -> dict:
+    """
+    Return raster metadata without georeferencing fields.
+    Keeps multiband TIFF structure but removes spatial metadata.
+    """
+    meta = meta.copy()
+    for k in ("crs", "transform", "gcps", "rpc"):
+        meta.pop(k, None)
+    return meta
 def _parse_bbox(v):
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return None
@@ -282,6 +291,7 @@ def make_detection_dataset(
     classes_csv: Optional[str],
     unknown_class: str,
     unknown_map_to: str,
+    plain_tiff: bool,
 ) -> None:
     _validate_overlap(overlap)
 
@@ -334,15 +344,16 @@ def make_detection_dataset(
     gdf_tiles = gdf_tiles[gdf_tiles[tile_id_col].astype(str).isin(allowed_tiles)].copy()
 
     # one writer per split (your new ImageDataSet supports split + whitelist)
-    ds_train = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col, mode=mode, size=size, overlap=overlap, split="train", classes_csv=classes_csv,
-    unknown_class=unknown_class,
-    unknown_map_to=unknown_map_to,)
-    ds_val = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode, size=size, overlap=overlap, split="val", classes_csv=classes_csv,
-    unknown_class=unknown_class,
-    unknown_map_to=unknown_map_to,)
-    ds_test = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode, size=size, overlap=overlap, split="test", classes_csv=classes_csv,
-    unknown_class=unknown_class,
-    unknown_map_to=unknown_map_to,)
+    ds_train = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col, mode=mode,
+                            size=size, overlap=overlap, split="train", classes_csv=classes_csv,
+                            unknown_class=unknown_class, unknown_map_to=unknown_map_to, plain_tiff=plain_tiff)
+    ds_val = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode,
+                          size=size, overlap=overlap, split="val", classes_csv=classes_csv,
+                          unknown_class=unknown_class, unknown_map_to=unknown_map_to, plain_tiff=plain_tiff)
+    ds_test = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode,
+                           size=size, overlap=overlap, split="test", classes_csv=classes_csv,
+                           unknown_class=unknown_class,    unknown_map_to=unknown_map_to, plain_tiff=plain_tiff)
+
 
     for _, row in tqdm(gdf_tiles.iterrows(), total=len(gdf_tiles), desc="YOLO tiles"):
         tile_id = str(row[tile_id_col])
@@ -417,6 +428,7 @@ def make_classification_patches(
     val_frac: float,
     test_frac: float,
     seed: int,
+    plain_tiff: bool,
 ) -> None:
     if patch_size % 2 != 0:
         raise ValueError("--patch-size must be even for centered windows.")
@@ -498,6 +510,9 @@ def make_classification_patches(
                     meta = src.meta.copy()
                     meta.update(height=patch.shape[1], width=patch.shape[2], transform=transform)
 
+                    if plain_tiff:
+                        meta = strip_georef_from_meta(meta)
+
                 else:  # bbox mode
                     if not bbox_col or bbox_col not in df.columns:
                         raise ValueError("bbox mode needs --bbox-col pointing to a bbox column in CSV")
@@ -526,9 +541,9 @@ def make_classification_patches(
 
                     meta = src.meta.copy()
                     meta.update(height=patch_size, width=patch_size)
-                    # transform no longer meaningful after resize; keep original or set identity
-                    # We'll keep src.transform to avoid writing invalid CRS metadata.
-                    # (If you need correct transform, you can compute it.)
+
+                    if plain_tiff:
+                        meta = strip_georef_from_meta(meta)
 
                 with rasterio.open(patch_path, "w", **meta) as dst:
                     dst.write(patch)
@@ -554,6 +569,11 @@ def main() -> None:
 
     # Detection
     ap_det = sub.add_parser("det", help="Generate YOLO detection dataset from bbox labels")
+    ap_det.add_argument(
+        "--plain-tiff",
+        action="store_true",
+        help="Write plain TIFF without georeferencing metadata (default: keep GeoTIFF metadata).",
+    )
     ap_det.add_argument("--tiles-gpkg", required=True)
     ap_det.add_argument("--bboxes-gpkg", required=True)
     ap_det.add_argument("--images-dir", required=True, help="Directory with parent tile rasters: <mode>_<tile_id>.tif")
@@ -587,6 +607,11 @@ def main() -> None:
 
     # Classification patches
     ap_cls = sub.add_parser("cls", help="Generate genus classification patches")
+    ap_cls.add_argument(
+        "--plain-tiff",
+        action="store_true",
+        help="Write plain TIFF without georeferencing metadata (default: keep GeoTIFF metadata).",
+    )
     ap_cls.add_argument("--tiles-gpkg", required=True)
     ap_cls.add_argument("--genus-labels-csv", required=True)
     ap_cls.add_argument("--images-dir", required=True)
@@ -624,7 +649,7 @@ def main() -> None:
             classes_csv=args.classes_csv,
             unknown_class=args.unknown_class,
             unknown_map_to=args.unknown_map_to,
-            
+            plain_tiff=args.plain_tiff,
         )
     elif args.cmd == "cls":
         make_classification_patches(
@@ -646,6 +671,7 @@ def main() -> None:
             val_frac=args.val_frac,
             test_frac=args.test_frac,
             seed=args.seed,
+            plain_tiff=args.plain_tiff,
         )
 
 

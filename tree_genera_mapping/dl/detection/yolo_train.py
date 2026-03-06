@@ -244,8 +244,7 @@ if __name__ == "__main__":
     # Config
     parser = argparse.ArgumentParser(description="YOLO11 Tree Genus Training")
 
-    parser.add_argument("--num-bands", type=int, default=5,
-                        help="Number of input bands (3=RGB, 4=RGB+NIR, 5=RGB+NIR+Height)")
+    parser.add_argument("--num-bands", type=int, default=5, help="Number of input bands (3=RGB, 4=RGB+NIR, 5=RGB+NIR+Height)")
     parser.add_argument("--img-size", type=int, default=640, help="Training image size")
     parser.add_argument("--epochs", type=int, default=200, help="Number of training epochs")
     parser.add_argument("--batch", type=int, default=16, help="Batch size")
