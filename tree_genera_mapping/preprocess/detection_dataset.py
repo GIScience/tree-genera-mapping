@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Set
 import geopandas as gpd
 import pandas as pd
 import rasterio
+import tifffile
 from rasterio.merge import merge as merge_tiles
 from rasterio.windows import Window
 from shapely.geometry import box
@@ -251,13 +252,15 @@ class ImageDataSet:
                             "driver": "GTiff",
                         }
                     )
-
-                    if self.plain_tiff:
-                        tile_meta = strip_georef_from_meta(tile_meta)
-
                     tile_filename = out_img_dir / f"{chip_stem}.tif"
-                    with rasterio.open(tile_filename, "w", **tile_meta) as dst:
-                        dst.write(tile_data)
+                    
+                    if self.plain_tiff:
+                        # tile_meta = strip_georef_from_meta(tile_meta)
+                        tifffile.imwrite(tile_filename, tile_data,  dtype=tile_data.dtype)
+                        
+                    else:
+                        with rasterio.open(tile_filename, "w", **tile_meta) as dst:
+                            dst.write(tile_data)
 
                     labels = self.extract_labels(trees_gdf, tile_geom, tile_transform)
                     if write_empty_labels or len(labels) > 0:
