@@ -252,7 +252,7 @@ if __name__ == "__main__":
     parser.add_argument("--restart", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=False,
                         help="Restart from checkpoint?")
     parser.add_argument("--run-dir", type=str, default="cache/runs", help="Directory for YOLO runs")
-    parser.add_argument("--data", type=str, default="cache/data_genera.yaml", help="Path to dataset YAML")
+    parser.add_argument("--data", type=str, default="conf/data_genera.yaml", help="Path to dataset YAML")
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--eval", type=bool, default=False, help="Evaluate model")
     parser.add_argument("--conf", type=float, default=0.3, help="Confidence level")
