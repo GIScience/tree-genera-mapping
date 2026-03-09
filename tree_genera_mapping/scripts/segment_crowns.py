@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-segment_trees.py
+segment_crowns.py
 
 CLI runner that:
 - reads nDOM (meters) OR RGBIH (uint8 normalized) + JSON stats
