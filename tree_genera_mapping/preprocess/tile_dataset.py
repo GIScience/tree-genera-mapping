@@ -51,6 +51,7 @@ class TileDataset:
         tile_id: str,
         output_dir: str,
         mode: str = "RGBIH",
+        norm_global: bool = False,
         dop_path: Optional[str] = None,
         ndom_path: Optional[str] = None,
         dgm_path: Optional[str] = None,
@@ -59,7 +60,7 @@ class TileDataset:
     ):
         self.tile_id = tile_id
         self.mode = mode.upper()
-
+        self.norm_global = norm_global
         self.dop_path = Path(dop_path) if dop_path else None
         self.ndom_path = Path(ndom_path) if ndom_path else None
         self.dgm_path = Path(dgm_path) if dgm_path else None
@@ -214,8 +215,15 @@ class TileDataset:
             logger.warning("CHM %s reprojected to all-NaN; treating as missing.", path)
             return None, None
 
-        vmin = float(np.nanmin(dst))
-        vmax = float(np.nanmax(dst))
+        if self.norm_global:
+            # Global MIN & MAX 
+            vmin = 0.0
+            vmax = 80.0
+        else:
+            # Local MIN & MAX
+            vmin = float(np.nanmin(dst))
+            vmax = float(np.nanmax(dst))
+        
         if (not np.isfinite(vmin)) or (not np.isfinite(vmax)) or (vmax <= vmin):
             return np.zeros((target_h, target_w), dtype=np.uint8), (0.0, 0.0)
 

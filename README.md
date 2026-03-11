@@ -68,7 +68,7 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
    i. Prepare detection dataset for Genera Mapping
       ```bash
       python -m tree_genera_mapping.scripts.build_dataset det \
-          --tiles-gpkg /data/lgl_bw_tiles.gpkg \
+          --tiles-gpkg data/lgl_bw_tiles.gpkg \
           --bboxes-gpkg path/to/pseudo_labels.gpkg \
           --images-dir /path/to/tiles_rgbih/ \
           --output-dir cache/ \
@@ -93,18 +93,35 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
    ```bash
     python -m tree_genera_mapping.scripts.build_dataset cls \
      --tiles-gpkg data/lgl_bw_tiles.gpkg \
-     --genus-labels-csv path/to/GreeHill_TreesGenus.csv \
-     --class-col genus \
-     --images-dir /path/to/tiles_rgbih/ \
-     --output-dir cache/genus_patches \
+     --genus-labels-csv /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/labels_geodata/greehill_genera.csv \
+     --split-csv data/greehill_genera_split.csv \
+     --images-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/tiles_rgbih/merged \
+     --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/cls \
      --mode rgbih \
-     --patch-size 128 \
+     --class-col genus \
+     --tile-id-col tile_id \
      --labels-tile-col tile_id \
-     --tile-split-table data/tiles_split.txt
-     --crop-mode fixed \ # bbox or fixed 
-     --bbox-col bbox \ # only for bbox crop mode
-     --x-col X \ # only for fixed crop mode
-     --y-col Y \ # only for fixed crop mode 
+     --crop-mode fixed \
+     --x-col X \
+     --y-col Y \
+     --patch-size 128 
+   ```
+   
+   ```bash
+     python -m tree_genera_mapping.scripts.build_dataset cls \
+      --tiles-gpkg data/lgl_bw_tiles.gpkg \
+      --genus-labels-csv /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/labels_geodata/greehill_genera.csv \
+      --split-csv data/greehill_genera_split.csv \
+      --images-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/tiles_rgbih/merged \
+      --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/cls \
+      --mode rgbih \
+      --class-col genus \
+      --tile-id-col tile_id \
+      --labels-tile-col tile_id \
+      --id-col tree_id \
+      --crop-mode bbox \
+      --bbox-col bbox \
+      --patch-size 128 
    ```
    
 3. Run code

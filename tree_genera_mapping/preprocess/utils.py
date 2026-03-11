@@ -30,8 +30,8 @@ def img_resample(data, data_transform, crs, scale_factor):
 
 def normalize_hm_to_255(chm_data, glb_min, glb_max):
     """Normalize Canopy Height Model (CHM) data to a 0-255 range."""
-    chm_min = glb_min  # np.min(chm_data)
-    chm_max = glb_max  # np.max(chm_data)
+    chm_min = glb_min  
+    chm_max = glb_max  
 
     # Avoid division by zero
     if chm_max == chm_min:

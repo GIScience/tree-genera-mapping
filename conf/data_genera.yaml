@@ -1,5 +1,5 @@
 # Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
-path: /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/yolo_rgbih #cache/data
+path: /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/det/yolo_rgbih #cache/data
 train: images/train
 val: images/val 
 test: images/test

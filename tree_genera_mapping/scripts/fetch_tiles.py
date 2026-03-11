@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import geopandas as gpd
+import pandas as pd
 from tqdm import tqdm
 import sys
 
@@ -93,6 +94,45 @@ def _find_single_file(base_dir: Path, patterns: List[str]) -> Optional[Path]:
             return matches[0]
     return None
 
+def resolve_tile_inputs(values: List[str]) -> List[str]:
+    """
+    Accepts:
+      --tiles 32_355_6048
+      --tiles 32_355_6048 32_355_6049
+      --tiles tiles.txt
+      --tiles tiles.csv
+    """
+    tile_ids = []
+
+    for v in values:
+        p = Path(v)
+
+        # Case 1: file
+        if p.exists():
+            df = pd.read_csv(p, sep=None, engine="python", dtype=str)
+            df.columns = [c.strip() for c in df.columns]
+
+            if "tile_id" in df.columns:
+                tile_ids.extend(df["tile_id"].dropna().tolist())
+
+            elif "dop_kachel" in df.columns:
+                vals = df["dop_kachel"].dropna().astype(str)
+                tile_ids.extend(
+                    vals.apply(lambda x: f"{x[:2]}_{x[2:5]}_{x[5:9]}").tolist()
+                )
+
+            else:
+                raise ValueError(f"{p} must contain tile_id or dop_kachel")
+
+        # Case 2: direct tile id
+        else:
+            tile_ids.append(v)
+
+    # normalize + remove duplicates
+    tile_ids = [normalize_tile_id(t) for t in tile_ids]
+    tile_ids = list(dict.fromkeys(tile_ids))
+
+    return tile_ids
 
 # ------------------------- tile id selection -------------------------
 def load_tile_ids_from_gpkg(tiles_gpkg: Path) -> List[str]:
@@ -224,6 +264,7 @@ def build_tile_for_mode(
     tmp_root: Path,
     output_tiles: Path,
     mode: str,
+    norm_global:str,
     products: Tuple[str, ...],
     keep_tmp: bool = False,
     overwrite: bool = False,
@@ -271,11 +312,16 @@ def build_tile_for_mode(
         ndom_path = None
         dom_path = None
         dgm_path = None
-
+    if norm_global=='global':
+        norm_height = True
+    else:
+        norm_height = False
+    
     tile = TileDataset(
         tile_id=tile_id,
         output_dir=str(output_tiles),
         mode=mode,
+        norm_global = norm_height,
         dop_path=str(dop_path),
         ndom_path=str(ndom_path) if ndom_path else None,
         dgm_path=str(dgm_path) if dgm_path else None,
@@ -334,15 +380,10 @@ def parse_args():
     p.add_argument("--tmp-root", required=True, help="Temp folder for downloads/unzips")
     p.add_argument("--output-dir", required=True, help="Output folder; writes to OUTPUT-DIR/")
     p.add_argument("--mode", default="RGBIH", help="TileDataset mode - RGB, RGBI, RGBIH")
+    p.add_argument("--norm-height", default="global", help = "Normalization of height values: global [0 - 80] or local [vmin, vmax] per 1x1km tile")
     p.add_argument("--keep-tmp", action="store_true", help="Keep per-tile temp directories")
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
-
-    p.add_argument(
-        "--tile-ids",
-        nargs="*",
-        default=None,
-        help="Optional explicit tile ids: 32_355_6048 OR 355_6048 OR 355-6048",
-    )
+    p.add_argument("--tile-ids", nargs="+", default=None, help="Tile ids (32_355_6048 OR 355_6048 OR 355-6048) OR path to file containing tile_ids/dop_kachel OR all")
     return p.parse_args()
 
 
@@ -359,8 +400,9 @@ def main():
     tmp_root.mkdir(parents=True, exist_ok=True)
     output_tiles.mkdir(parents=True, exist_ok=True)
 
-    if args.tile_ids and len(args.tile_ids) > 0:
-        tile_ids = [normalize_tile_id(t) for t in args.tile_ids]
+    if args.tile_ids:
+        tile_ids = resolve_tile_inputs(args.tile_ids)
+        # tile_ids = [normalize_tile_id(t) for t in args.tile_ids]
         logging.info("Processing %d explicit tile_ids", len(tile_ids))
     else:
         tile_ids = load_tile_ids_from_gpkg(Path(args.tiles_gpkg))
@@ -374,6 +416,7 @@ def main():
                 tmp_root=tmp_root,
                 output_tiles=output_tiles,
                 mode=mode,
+                norm_global=args.norm_height,
                 products=products,
                 keep_tmp=args.keep_tmp,
                 overwrite=args.overwrite,

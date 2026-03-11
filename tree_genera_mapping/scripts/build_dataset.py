@@ -252,21 +252,28 @@ def load_subtile_split_table(path: str) -> Tuple[Set[str], Set[str], Set[str]]:
 
     df = pd.read_csv(p, sep=_sniff_sep(p), dtype=str)
     df.columns = [c.strip() for c in df.columns]
-    if "subtile_id" not in df.columns or "split" not in df.columns:
-        raise ValueError("Subtile split table must contain columns: subtile_id, split")
+    # if "subtile_id" not in df.columns or "split" not in df.columns:
+    #     raise ValueError("Subtile split table must contain columns: subtile_id, split")
 
-    df["subtile_id"] = df["subtile_id"].astype(str).str.strip()
-    df["split"] = df["split"].astype(str).str.strip().str.lower().replace({"valid": "val"})
+    # df["subtile_id"] = df["subtile_id"].astype(str).str.strip()
+    # df["split"] = df["split"].astype(str).str.strip().str.lower().replace({"valid": "val"})
 
-    bad = set(df["split"].unique()) - ALLOWED_SPLITS
-    if bad:
-        raise ValueError(f"Invalid split values in subtile table {bad}. Allowed: {ALLOWED_SPLITS}")
+    # bad = set(df["split"].unique()) - ALLOWED_SPLITS
+    # if bad:
+    #     raise ValueError(f"Invalid split values in subtile table {bad}. Allowed: {ALLOWED_SPLITS}")
 
-    train = set(df.loc[df["split"] == "train", "subtile_id"])
-    val = set(df.loc[df["split"] == "val", "subtile_id"])
-    test = set(df.loc[df["split"] == "test", "subtile_id"])
-    return train, val, test
+    # train = set(df.loc[df["split"] == "train", "subtile_id"])
+    # val = set(df.loc[df["split"] == "val", "subtile_id"])
+    # test = set(df.loc[df["split"] == "test", "subtile_id"])
+    
+    # return train, val, test
 
+    # Use the column name you have (subtile_id)
+    all_ids = set(df["subtile_id"].astype(str).str.strip())
+    
+    # Return the same set for all three splits
+    # This lets the tile-level logic handle the destination
+    return all_ids, all_ids, all_ids
 
 # -----------------------------------------------------------------------------
 # 1) YOLO detection dataset
@@ -411,29 +418,32 @@ def make_detection_dataset(
 def make_classification_patches(
     *,
     tiles_gpkg: str,
-    genus_labels_csv: str,          # <-- CSV instead of GPKG
+    genus_labels_csv: str,
     images_dir: str,
     output_dir: str,
     mode: str,
     patch_size: int,
-    tile_id_col: str,               # column name in tiles gpkg (tile_id)
-    labels_tile_col: str,           # column name in CSV for tile id (tel_id)
-    class_col: str,                 # genus
-    id_col: str,                    # tree_id
-    x_col: str,                     # X
-    y_col: str,                     # Y
-    bbox_col: Optional[str],        # bbox
+    tile_id_col: str,               # column name in tiles gpkg
+    labels_tile_col: str,           # column name in labels CSV for tile id
+    class_col: str,                 # genus column
+    id_col: str,                    # tree_id column
+    x_col: str,                     # X coordinate column
+    y_col: str,                     # Y coordinate column
+    bbox_col: Optional[str],        # bbox column
     crop_mode: str,                 # fixed|bbox
     tile_split_table: Optional[str],
     val_frac: float,
     test_frac: float,
     seed: int,
     plain_tiff: bool,
+    split_csv: Optional[str] = None,  # CSV with tree_id,split for tree-level split
 ) -> None:
-    if patch_size % 2 != 0:
-        raise ValueError("--patch-size must be even for centered windows.")
+    if patch_size <= 0:
+        raise ValueError("--patch-size must be > 0")
     if crop_mode not in {"fixed", "bbox"}:
         raise ValueError("--crop-mode must be fixed|bbox")
+    if crop_mode == "fixed" and patch_size % 2 != 0:
+        raise ValueError("--patch-size must be even for centered fixed windows")
 
     images_dir_p = Path(images_dir)
     if not images_dir_p.exists():
@@ -443,113 +453,236 @@ def make_classification_patches(
     for split in ("train", "val", "test"):
         (out_root / split).mkdir(parents=True, exist_ok=True)
 
-    # tiles (only needed to list available tile_ids + CRS sanity)
+    # tiles are still useful for available tile_ids and sanity checks
     gdf_tiles = gpd.read_file(tiles_gpkg)
     if gdf_tiles.empty:
         raise ValueError(f"No tiles found in {tiles_gpkg}")
     gdf_tiles = ensure_tile_id_column(gdf_tiles, tile_id_col=tile_id_col, prefer_dop_kachel=True)
+    available_tiles = set(gdf_tiles[tile_id_col].astype(str))
 
     # labels CSV
     df = pd.read_csv(genus_labels_csv)
-    for c in [labels_tile_col, class_col, id_col, x_col, y_col]:
+    required_cols = [labels_tile_col, class_col, id_col]
+    if crop_mode == "fixed":
+        required_cols += [x_col, y_col]
+    if crop_mode == "bbox":
+        if not bbox_col:
+            raise ValueError("bbox mode needs --bbox-col")
+        required_cols += [bbox_col]
+
+    for c in required_cols:
         if c not in df.columns:
             raise ValueError(f"CSV missing required column: {c}")
 
-    # build tile split sets (train/val/test tile IDs)
-    train_tiles, val_tiles, test_tiles = build_split_sets(
-        gdf_tiles=gdf_tiles,
-        tile_id_col=tile_id_col,
-        tile_split_table=tile_split_table,
-        val_frac=val_frac,
-        test_frac=test_frac,
-        seed=seed,
-    )
-    logger.info("Tile split (patches): train=%d val=%d test=%d", len(train_tiles), len(val_tiles), len(test_tiles))
+    df[labels_tile_col] = df[labels_tile_col].astype(str).str.strip()
+    df[id_col] = df[id_col].astype(str).str.strip()
+    df[class_col] = df[class_col].astype(str).str.strip()
 
+    # -------------------------------------------------------------------------
+    # split assignment
+    # -------------------------------------------------------------------------
+    if split_csv:
+        df_split = pd.read_csv(split_csv)
+
+        if id_col not in df_split.columns or "split" not in df_split.columns:
+            raise ValueError(f"{split_csv} must contain columns: {id_col}, split")
+
+        df_split[id_col] = df_split[id_col].astype(str).str.strip()
+        df_split["split"] = (
+            df_split["split"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace({"valid": "val"})
+        )
+
+        bad = set(df_split["split"].unique()) - ALLOWED_SPLITS
+        if bad:
+            raise ValueError(f"Invalid split values in split_csv: {bad}. Allowed: {ALLOWED_SPLITS}")
+
+        if df_split[id_col].duplicated().any():
+            dupes = df_split.loc[df_split[id_col].duplicated(), id_col].tolist()[:10]
+            raise ValueError(f"Duplicate {id_col} values in split_csv (examples): {dupes}")
+
+        df = df.merge(df_split[[id_col, "split"]], on=id_col, how="inner")
+
+        if df.empty:
+            raise ValueError(f"No rows left after merging {genus_labels_csv} with {split_csv} on {id_col}")
+
+        logger.info(
+            "Tree-level split enabled from %s: train=%d val=%d test=%d",
+            split_csv,
+            int((df["split"] == "train").sum()),
+            int((df["split"] == "val").sum()),
+            int((df["split"] == "test").sum()),
+        )
+
+    else:
+        train_tiles, val_tiles, test_tiles = build_split_sets(
+            gdf_tiles=gdf_tiles,
+            tile_id_col=tile_id_col,
+            tile_split_table=tile_split_table,
+            val_frac=val_frac,
+            test_frac=test_frac,
+            seed=seed,
+        )
+        logger.info(
+            "Tile split (patches): train=%d val=%d test=%d",
+            len(train_tiles), len(val_tiles), len(test_tiles)
+        )
+
+    # -------------------------------------------------------------------------
+    # patch extraction
+    # -------------------------------------------------------------------------
     half = patch_size // 2
+    cache_tile_id = None
+    cache_src = None
 
-    # iterate labels
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="Genus patches"):
-        tile_id = str(row[labels_tile_col]).strip()
-        if tile_id in test_tiles:
-            split = "test"
-        elif tile_id in val_tiles:
-            split = "val"
-        elif tile_id in train_tiles:
-            split = "train"
-        else:
-            continue
+    def _close_cache():
+        nonlocal cache_src, cache_tile_id
+        if cache_src is not None:
+            try:
+                cache_src.close()
+            except Exception:
+                pass
+        cache_src = None
+        cache_tile_id = None
 
-        class_name = str(row[class_col]).strip().replace(" ", "_")
-        out_id = str(row[id_col])
+    try:
+        for _, row in tqdm(df.iterrows(), total=len(df), desc="Genus patches"):
+            tile_id = str(row[labels_tile_col]).strip()
 
-        tile_path = find_tile_raster(images_dir_p, mode, tile_id)
-        if not tile_path.exists():
-            continue
+            if tile_id not in available_tiles:
+                continue
 
-        class_dir = out_root / split / class_name
-        class_dir.mkdir(parents=True, exist_ok=True)
-        patch_path = class_dir / f"{out_id}.tif"
-        if patch_path.exists():
-            continue
+            if split_csv:
+                split = str(row["split"]).strip().lower()
+                if split not in ALLOWED_SPLITS:
+                    continue
+            else:
+                if tile_id in test_tiles:
+                    split = "test"
+                elif tile_id in val_tiles:
+                    split = "val"
+                elif tile_id in train_tiles:
+                    split = "train"
+                else:
+                    continue
 
-        try:
-            with rasterio.open(tile_path) as src:
+            class_name = str(row[class_col]).strip().replace(" ", "_")
+            out_id = str(row[id_col]).strip()
+
+            tile_path = find_tile_raster(images_dir_p, mode, tile_id)
+            if not tile_path.exists():
+                logger.warning("Missing tile raster: %s", tile_path)
+                continue
+
+            class_dir = out_root / split / class_name
+            class_dir.mkdir(parents=True, exist_ok=True)
+
+            # output file should be tree_id.tif
+            patch_path = class_dir / f"{out_id}.tif"
+            if patch_path.exists():
+                continue
+
+            try:
+                # reuse raster handle while consecutive rows belong to same tile
+                if cache_tile_id != tile_id:
+                    _close_cache()
+                    cache_src = rasterio.open(tile_path)
+                    cache_tile_id = tile_id
+
+                src = cache_src
+
                 if crop_mode == "fixed":
-                    x = float(row[x_col]); y = float(row[y_col])
+                    x = float(row[x_col])
+                    y = float(row[y_col])
+                
                     r, c = src.index(x, y)
                     win = Window(c - half, r - half, patch_size, patch_size)
-
-                    if (win.col_off < 0 or win.row_off < 0 or
+                
+                    if (
+                        win.col_off < 0 or win.row_off < 0 or
                         win.col_off + win.width > src.width or
-                        win.row_off + win.height > src.height):
+                        win.row_off + win.height > src.height
+                    ):
                         continue
-
+                
                     patch = src.read(window=win)
-                    transform = src.window_transform(win)
                     meta = src.meta.copy()
-                    meta.update(height=patch.shape[1], width=patch.shape[2], transform=transform)
-
+                    meta.update(
+                        driver="GTiff",
+                        height=patch.shape[1],
+                        width=patch.shape[2],
+                        count=patch.shape[0],
+                        transform=src.window_transform(win),
+                    )
+                
                     if plain_tiff:
                         meta = strip_georef_from_meta(meta)
-
+                
                 else:  # bbox mode
-                    if not bbox_col or bbox_col not in df.columns:
+                    if bbox_col not in df.columns:
                         raise ValueError("bbox mode needs --bbox-col pointing to a bbox column in CSV")
-
+                
                     bb = _parse_bbox(row[bbox_col])
                     if bb is None:
                         continue
+                
                     minx, miny, maxx, maxy = bb
-
-                    # build window from bounds
+                
+                    # skip degenerate bboxes
+                    if not (maxx > minx and maxy > miny):
+                        continue
+                
                     win = rasterio.windows.from_bounds(minx, miny, maxx, maxy, transform=src.transform)
                     win = win.round_offsets().round_shape()
-
-                    if (win.col_off < 0 or win.row_off < 0 or
-                        win.col_off + win.width > src.width or
-                        win.row_off + win.height > src.height):
+                
+                    if win.width <= 0 or win.height <= 0:
                         continue
-
+                
+                    if (
+                        win.col_off < 0 or win.row_off < 0 or
+                        win.col_off + win.width > src.width or
+                        win.row_off + win.height > src.height
+                    ):
+                        continue
+                
                     patch = src.read(window=win)
-
-                    # resize to patch_size for resnet input
-                    import cv2
-                    patch = np.stack(
-                        [cv2.resize(b, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR) for b in patch]
+                    if patch.size == 0:
+                        continue
+                
+                    # resize each band to fixed patch_size for ResNet input
+                    patch = np.stack([
+                        cv2.resize(b, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR)
+                        for b in patch
+                    ])
+                
+                    dst_transform = rasterio.transform.from_bounds(
+                        minx, miny, maxx, maxy, patch_size, patch_size
                     )
-
+                
                     meta = src.meta.copy()
-                    meta.update(height=patch_size, width=patch_size)
-
+                    meta.update(
+                        driver="GTiff",
+                        height=patch_size,
+                        width=patch_size,
+                        count=patch.shape[0],
+                        transform=dst_transform,
+                    )
+                
                     if plain_tiff:
                         meta = strip_georef_from_meta(meta)
-
+                
+                # write patch to disk
                 with rasterio.open(patch_path, "w", **meta) as dst:
                     dst.write(patch)
 
-        except Exception as e:
-            logger.warning("Failed patch %s from tile %s: %s", out_id, tile_path.name, e)
+            except Exception as e:
+                logger.warning("Failed patch %s from tile %s: %s", out_id, tile_path.name, e)
+
+    finally:
+        _close_cache()
 
     logger.info("✅ Classification patches written to: %s", out_root)
 
@@ -625,6 +758,8 @@ def main() -> None:
     ap_cls.add_argument("--bbox-col", default="bbox")
     ap_cls.add_argument("--patch-size", type=int, default=128)
     ap_cls.add_argument("--crop-mode", default="fixed", choices=["fixed", "bbox"])
+    ap_cls.add_argument("--id-col", default="tree_id")
+    ap_cls.add_argument("--split-csv", default=None, help="CSV with tree_id,split for tree-level split")
     add_split_args(ap_cls)
 
     args = ap.parse_args()
@@ -672,6 +807,7 @@ def main() -> None:
             test_frac=args.test_frac,
             seed=args.seed,
             plain_tiff=args.plain_tiff,
+            split_csv=args.split_csv,
         )
 
 
