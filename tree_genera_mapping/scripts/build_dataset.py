@@ -240,11 +240,18 @@ def build_split_sets(
     return make_tile_split_random(available, val_frac=val_frac, test_frac=test_frac, seed=seed)
 
 
-def load_subtile_split_table(path: str) -> Tuple[Set[str], Set[str], Set[str]]:
+def load_subtile_split_table(path: str) -> Set[str]:
     """
-    CSV/TSV/TXT with columns: subtile_id, split (train|val|test).
-    Example subtile_id: 32_464_5487_91
-    Returns (train_set, val_set, test_set) of subtile_id strings.
+    Load a whitelist of allowed subtile IDs.
+
+    Expected file format:
+      CSV / TSV / TXT with column:
+        subtile_id
+
+    Example:
+        subtile_id
+        32_464_5487_91
+        32_456_5429_72
     """
     p = Path(path)
     if not p.exists():
@@ -252,28 +259,18 @@ def load_subtile_split_table(path: str) -> Tuple[Set[str], Set[str], Set[str]]:
 
     df = pd.read_csv(p, sep=_sniff_sep(p), dtype=str)
     df.columns = [c.strip() for c in df.columns]
-    # if "subtile_id" not in df.columns or "split" not in df.columns:
-    #     raise ValueError("Subtile split table must contain columns: subtile_id, split")
 
-    # df["subtile_id"] = df["subtile_id"].astype(str).str.strip()
-    # df["split"] = df["split"].astype(str).str.strip().str.lower().replace({"valid": "val"})
+    if "subtile_id" not in df.columns:
+        raise ValueError("Subtile table must contain column: subtile_id")
 
-    # bad = set(df["split"].unique()) - ALLOWED_SPLITS
-    # if bad:
-    #     raise ValueError(f"Invalid split values in subtile table {bad}. Allowed: {ALLOWED_SPLITS}")
+    ids = set(df["subtile_id"].astype(str).str.strip())
 
-    # train = set(df.loc[df["split"] == "train", "subtile_id"])
-    # val = set(df.loc[df["split"] == "val", "subtile_id"])
-    # test = set(df.loc[df["split"] == "test", "subtile_id"])
-    
-    # return train, val, test
+    bad = [x for x in ids if len(x.split("_")) < 4]
+    if bad:
+        raise ValueError(f"Malformed subtile_id examples: {bad[:10]}")
 
-    # Use the column name you have (subtile_id)
-    all_ids = set(df["subtile_id"].astype(str).str.strip())
-    
-    # Return the same set for all three splits
-    # This lets the tile-level logic handle the destination
-    return all_ids, all_ids, all_ids
+    logger.info("Loaded %d subtile whitelist IDs", len(ids))
+    return ids
 
 # -----------------------------------------------------------------------------
 # 1) YOLO detection dataset
@@ -300,6 +297,7 @@ def make_detection_dataset(
     unknown_map_to: str,
     plain_tiff: bool,
 ) -> None:
+
     _validate_overlap(overlap)
 
     images_dir_p = Path(images_dir)
@@ -307,20 +305,32 @@ def make_detection_dataset(
         raise FileNotFoundError(images_dir_p)
 
     out_root = Path(output_dir) / f"yolo_{mode}"
+
     for split in ("train", "val", "test"):
         (out_root / "images" / split).mkdir(parents=True, exist_ok=True)
         (out_root / "labels" / split).mkdir(parents=True, exist_ok=True)
+
+    # ---------------------------------------------------------
+    # load data
+    # ---------------------------------------------------------
 
     gdf_tiles = gpd.read_file(tiles_gpkg)
     gdf_boxes = gpd.read_file(bboxes_gpkg)
 
     if gdf_tiles.empty:
         raise ValueError(f"No tiles found in {tiles_gpkg}")
-    if gdf_boxes.empty:
-        logger.warning("No bboxes found in %s. You may only get negatives.", bboxes_gpkg)
 
     gdf_tiles, gdf_boxes = ensure_same_crs(gdf_tiles, gdf_boxes)
-    gdf_tiles = ensure_tile_id_column(gdf_tiles, tile_id_col=tile_id_col, prefer_dop_kachel=True)
+
+    gdf_tiles = ensure_tile_id_column(
+        gdf_tiles,
+        tile_id_col=tile_id_col,
+        prefer_dop_kachel=True,
+    )
+
+    # ---------------------------------------------------------
+    # tile splits
+    # ---------------------------------------------------------
 
     train_tiles, val_tiles, test_tiles = build_split_sets(
         gdf_tiles=gdf_tiles,
@@ -332,85 +342,158 @@ def make_detection_dataset(
     )
 
     logger.info(
-        "Tile split: train=%d val=%d test=%d (available=%d)",
-        len(train_tiles), len(val_tiles), len(test_tiles), len(set(gdf_tiles[tile_id_col].tolist()))
+        "Tile split: train=%d val=%d test=%d",
+        len(train_tiles),
+        len(val_tiles),
+        len(test_tiles),
     )
 
-    # optional: subtile whitelist sets
-    subtile_train = subtile_val = subtile_test = None
+    # ---------------------------------------------------------
+    # subtile whitelist
+    # ---------------------------------------------------------
+
+    subtile_whitelist = None
+
     if subtile_split_table:
-        st_tr, st_va, st_te = load_subtile_split_table(subtile_split_table)
-        subtile_train, subtile_val, subtile_test = st_tr, st_va, st_te
+
+        subtile_whitelist = load_subtile_split_table(subtile_split_table)
+
         logger.info(
-            "Subtile filter enabled: train=%d val=%d test=%d",
-            len(subtile_train), len(subtile_val), len(subtile_test)
+            "Subtile whitelist enabled: %d chips",
+            len(subtile_whitelist),
         )
 
-    # process only tiles that are in any split
+        # restrict parent tiles to speed up processing
+        allowed_parent_tiles = {sid.rsplit("_", 1)[0] for sid in subtile_whitelist}
+
+        gdf_tiles = gdf_tiles[
+            gdf_tiles[tile_id_col].astype(str).isin(allowed_parent_tiles)
+        ].copy()
+
+        logger.info(
+            "Restricted tiles to %d parent tiles based on whitelist",
+            len(gdf_tiles),
+        )
+
+    # ---------------------------------------------------------
+    # restrict tiles to split sets
+    # ---------------------------------------------------------
+
     allowed_tiles = train_tiles | val_tiles | test_tiles
-    gdf_tiles = gdf_tiles[gdf_tiles[tile_id_col].astype(str).isin(allowed_tiles)].copy()
 
-    # one writer per split (your new ImageDataSet supports split + whitelist)
-    ds_train = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col, mode=mode,
-                            size=size, overlap=overlap, split="train", classes_csv=classes_csv,
-                            unknown_class=unknown_class, unknown_map_to=unknown_map_to, plain_tiff=plain_tiff)
-    ds_val = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode,
-                          size=size, overlap=overlap, split="val", classes_csv=classes_csv,
-                          unknown_class=unknown_class, unknown_map_to=unknown_map_to, plain_tiff=plain_tiff)
-    ds_test = ImageDataSet(img_dir=images_dir_p, output_dir=out_root, label_col=label_col,  mode=mode,
-                           size=size, overlap=overlap, split="test", classes_csv=classes_csv,
-                           unknown_class=unknown_class,    unknown_map_to=unknown_map_to, plain_tiff=plain_tiff)
+    gdf_tiles = gdf_tiles[
+        gdf_tiles[tile_id_col].astype(str).isin(allowed_tiles)
+    ].copy()
 
+    # ---------------------------------------------------------
+    # create dataset writers
+    # ---------------------------------------------------------
+
+    ds_train = ImageDataSet(
+        img_dir=images_dir_p,
+        output_dir=out_root,
+        label_col=label_col,
+        mode=mode,
+        size=size,
+        overlap=overlap,
+        split="train",
+        classes_csv=classes_csv,
+        unknown_class=unknown_class,
+        unknown_map_to=unknown_map_to,
+        plain_tiff=plain_tiff,
+    )
+
+    ds_val = ImageDataSet(
+        img_dir=images_dir_p,
+        output_dir=out_root,
+        label_col=label_col,
+        mode=mode,
+        size=size,
+        overlap=overlap,
+        split="val",
+        classes_csv=classes_csv,
+        unknown_class=unknown_class,
+        unknown_map_to=unknown_map_to,
+        plain_tiff=plain_tiff,
+    )
+
+    ds_test = ImageDataSet(
+        img_dir=images_dir_p,
+        output_dir=out_root,
+        label_col=label_col,
+        mode=mode,
+        size=size,
+        overlap=overlap,
+        split="test",
+        classes_csv=classes_csv,
+        unknown_class=unknown_class,
+        unknown_map_to=unknown_map_to,
+        plain_tiff=plain_tiff,
+    )
+
+    # ---------------------------------------------------------
+    # process tiles
+    # ---------------------------------------------------------
 
     for _, row in tqdm(gdf_tiles.iterrows(), total=len(gdf_tiles), desc="YOLO tiles"):
+
         tile_id = str(row[tile_id_col])
+
         tile_path = find_tile_raster(images_dir_p, mode, tile_id)
+
         if not tile_path.exists():
-            logger.warning("Missing tile raster: %s (skipping)", tile_path)
+            logger.warning("Missing tile raster: %s", tile_path)
             continue
 
-        # per-tile label selection
-        tile_labels = gdf_boxes
+        # -----------------------------------------------------
+        # select labels belonging to this tile
+        # -----------------------------------------------------
+
         if tile_id_col in gdf_boxes.columns:
-            tile_labels = gdf_boxes[gdf_boxes[tile_id_col].astype(str) == tile_id]
+            tile_labels = gdf_boxes[
+                gdf_boxes[tile_id_col].astype(str) == tile_id
+            ]
         else:
-            try:
-                tile_labels = gdf_boxes[gdf_boxes.intersects(row.geometry)]
-            except Exception:
-                pass
+            tile_labels = gdf_boxes[gdf_boxes.intersects(row.geometry)]
 
         if (tile_labels is None or len(tile_labels) == 0) and not include_empty_tiles:
             continue
 
+        # -----------------------------------------------------
+        # send tile to correct dataset writer
+        # -----------------------------------------------------
+
         if tile_id in test_tiles:
+
             ds_test.split_tiff_to_tiles(
                 tile_path,
                 tile_labels,
                 split="test",
-                subtile_whitelist=subtile_test,
+                subtile_whitelist=subtile_whitelist,
                 write_empty_labels=include_empty_tiles,
             )
+
         elif tile_id in val_tiles:
+
             ds_val.split_tiff_to_tiles(
                 tile_path,
                 tile_labels,
                 split="val",
-                subtile_whitelist=subtile_val,
+                subtile_whitelist=subtile_whitelist,
                 write_empty_labels=include_empty_tiles,
             )
+
         else:
+
             ds_train.split_tiff_to_tiles(
                 tile_path,
                 tile_labels,
                 split="train",
-                subtile_whitelist=subtile_train,
+                subtile_whitelist=subtile_whitelist,
                 write_empty_labels=include_empty_tiles,
             )
 
-    logger.info("✅ YOLO detection dataset written to: %s", out_root)
-    logger.info("   images/: %s", out_root / "images")
-    logger.info("   labels/: %s", out_root / "labels")
-
+    logger.info("YOLO dataset written to: %s", out_root)
 
 # -----------------------------------------------------------------------------
 # 2) Classification patches dataset

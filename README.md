@@ -53,8 +53,13 @@ How to run the pre-trained YOLOv11l model 5CH imagery
 How to run the Genera Mapping scripts
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
-python tree_genera_mapping/scripts/fetch_tiles.py  \
- --tile-id 32_355_6048
+python tree_genera_mapping/scripts/fetch_tiles.py \
+  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --tile-ids data/tiles_split.txt \
+  --tmp-root cache/tmp_tiles \
+  --output-dir cache/data/global \
+  --mode RGBIH \
+  --norm-height global
 ```
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
@@ -69,9 +74,9 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
       ```bash
       python -m tree_genera_mapping.scripts.build_dataset det \
           --tiles-gpkg data/lgl_bw_tiles.gpkg \
-          --bboxes-gpkg path/to/pseudo_labels.gpkg \
-          --images-dir /path/to/tiles_rgbih/ \
-          --output-dir cache/ \
+          --bboxes-gpkg cache/weak_pseudo/pseudo_labels_v3.gpkg \
+          --images-dir cache/data/global \
+          --output-dir cache/data/det \
           --mode rgbih \
           --tile-id-col tile_id \
           --label-col top1_class \
@@ -80,7 +85,7 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
           --size 640 \
           --overlap 0.2 \
           --tile-split-table data/tiles_split.txt  \
-          --subtile-split-table data/subtiles_split.txt   \
+          --subtile-split-table data/subtiles_ids.txt   \
           --include-empty-tiles \
           --plain-tiff \ # yolo_train.py only reads TIFF (Non-GeoTIFF)
       ```

@@ -93,7 +93,43 @@ def _find_single_file(base_dir: Path, patterns: List[str]) -> Optional[Path]:
         if matches:
             return matches[0]
     return None
+def _find_tile_file(base_dir: Path, tile_id: str, ext: str) -> Optional[Path]:
+    """
+    Find file corresponding to a tile_id inside extracted ZIP contents.
 
+    tile_id example:
+        32_458_5428
+    """
+
+    if not base_dir.exists():
+        return None
+
+    tile_id = normalize_tile_id(tile_id)
+    _, x, y = tile_id.split("_")
+
+    candidates = []
+
+    for fp in base_dir.rglob(f"*{ext}"):
+        name = fp.name
+
+        # must contain tile coordinates
+        if x in name and y in name:
+            candidates.append(fp)
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    if len(candidates) > 1:
+        logging.warning(
+            "Multiple matches for tile %s in %s → using first: %s",
+            tile_id,
+            base_dir.name,
+            [c.name for c in candidates[:5]],
+        )
+        return sorted(candidates)[0]
+
+    logging.error("No file found for tile %s in %s", tile_id, base_dir)
+    return None
 def resolve_tile_inputs(values: List[str]) -> List[str]:
     """
     Accepts:
@@ -230,30 +266,14 @@ def download_tile_to_temp(
 
     dop_path = None
     if "dop20rgbi" in products:
-        dop_path = _find_single_file(
-            unzipped_dir / "dop20rgbi",
-            [f"dop20rgbi_{stub}.tif", "dop20rgbi_*.tif", "*.tif"],
-        )
+        dop_path = _find_tile_file(unzipped_dir / "dop20rgbi", tile_id, ".tif")
+
     if dop_path is None and "dop20rgb" in products:
-        dop_path = _find_single_file(
-            unzipped_dir / "dop20rgb",
-            [f"dop20rgb_{stub}.tif", "dop20rgb_*.tif", "*.tif"],
-        )
+        dop_path = _find_tile_file(unzipped_dir / "dop20rgb", tile_id, ".tif")
 
-    ndom_path = _find_single_file(
-        unzipped_dir / "ndom1",
-        [f"ndom1_{stub}.tif", "ndom1_*.tif", "*.tif"],
-    )
-
-    dom_path = _find_single_file(
-        unzipped_dir / "dom1",
-        [f"dom1_{stub}.tif", "dom1_*.tif", "*.tif"],
-    )
-
-    dgm_path = _find_single_file(
-        unzipped_dir / "dgm1",
-        [f"dgm1_{stub}.xyz", "dgm1_*.xyz", "*.xyz"],
-    )
+    ndom_path = _find_tile_file(unzipped_dir / "ndom1", tile_id, ".tif")
+    dom_path = _find_tile_file(unzipped_dir / "dom1", tile_id, ".tif")
+    dgm_path = _find_tile_file(unzipped_dir / "dgm1", tile_id, ".xyz")
 
     return dop_path, ndom_path, dom_path, dgm_path, tmp_tile_dir
 
