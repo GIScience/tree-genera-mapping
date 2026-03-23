@@ -1,6 +1,6 @@
+from __future__ import annotations
 import pandas as pd
 from typing import Dict, List
-from __future__ import annotations
 
 import random
 from pathlib import Path

@@ -16,6 +16,10 @@ IMAGES_DIR/
   val/
     Acer/*.tif
     ...
+  test/
+    Acer/*.tif
+    ...
+
 Optional test/ is ignored here.
 
 Works with:
@@ -31,8 +35,8 @@ Outputs (out_dir):
 - history.csv
 - channel_stats.json
 - losses.png / accuracy.png / results.png
-- confusion_epochXXX.png
-- class_report_epochXXX.csv
+- confusion_best.png
+- class_report_best.csv
 - <experiment>_best.pt
 
 Checkpoint format:
@@ -85,14 +89,14 @@ except Exception:
 DEFAULT_MEAN = {
     3: [0.3996, 0.4186, 0.3855],
     4: [0.3996, 0.4186, 0.3855, 0.6243],
-    5: [0.3996, 0.4186, 0.3855, 0.6243, 0.1899],
+    5: [0.35577967417836187, 0.3828538178861141, 0.3382359597325325, 0.6792797298312188, 0.22495903284661473],
 }
+
 DEFAULT_STD = {
     3: [0.1900, 0.1741, 0.1641],
     4: [0.1900, 0.1741, 0.1641, 0.2313],
-    5: [0.1900, 0.1741, 0.1641, 0.2313, 0.1500],
+    5: [0.14786359866401644, 0.14076266740676255, 0.12388920552784212, 0.1966340148468835, 0.15016926104262204],
 }
-
 
 # ---------------------------------------------------------------------
 # logging
@@ -119,17 +123,31 @@ def setup_logging(out_dir: Path, use_tensorboard: bool):
     csv_f = open(csv_path, "w", newline="")
     csv_w = csv.writer(csv_f)
     csv_w.writerow(
-        ["epoch", "time_s", "train_loss", "train_top1", "train_top5", "val_loss", "val_top1", "val_top5", "lr"]
+        [
+            "epoch",
+            "time_s",
+            "train_loss",
+            "train_top1",
+            "train_top5",
+            "val_loss",
+            "val_top1",
+            "val_top5",
+            "val_macro_f1",
+            "val_weighted_f1",
+            "lr",
+        ]
     )
 
     tb = SummaryWriter(str(out_dir / "tb")) if use_tensorboard and SummaryWriter else None
     return logger, csv_f, csv_w, tb
 
 
-def log_epoch_csv(csv_w, epoch: int, time_s: float, tr, va, lr: float):
+def log_epoch_csv(csv_w, epoch: int, time_s: float, tr, va, val_macro_f1: float, val_weighted_f1: float, lr: float):
     tr_loss, tr_t1, tr_t5 = tr
     va_loss, va_t1, va_t5 = va
-    csv_w.writerow([epoch, round(time_s, 3), tr_loss, tr_t1, tr_t5, va_loss, va_t1, va_t5, lr])
+    csv_w.writerow(
+        [epoch, round(time_s, 3), tr_loss, tr_t1, tr_t5, va_loss, va_t1, va_t5, val_macro_f1, val_weighted_f1, lr]
+    )
 
 
 # ---------------------------------------------------------------------
@@ -311,10 +329,6 @@ def estimate_channel_stats(
     max_samples: int = 2000,
     seed: int = 42,
 ) -> Tuple[List[float], List[float]]:
-    """
-    Estimate mean/std from training images only.
-    Uses random subset for speed.
-    """
     if len(df) == 0:
         raise ValueError("Cannot estimate channel stats on empty dataframe")
 
@@ -383,9 +397,9 @@ class GenusImageDataset(Dataset):
             return x
 
         if random.random() < 0.5:
-            x = torch.flip(x, dims=[2])  # horizontal
+            x = torch.flip(x, dims=[2])
         if random.random() < 0.5:
-            x = torch.flip(x, dims=[1])  # vertical
+            x = torch.flip(x, dims=[1])
         if random.random() < 0.5:
             k = random.randint(0, 3)
             x = torch.rot90(x, k=k, dims=[1, 2])
@@ -404,7 +418,7 @@ class GenusImageDataset(Dataset):
         if self.percentile_normalize:
             arr = percentile_normalize_hwc(arr)
 
-        x = torch.from_numpy(np.transpose(arr, (2, 0, 1))).float()  # C,H,W
+        x = torch.from_numpy(np.transpose(arr, (2, 0, 1))).float()
         x = resize_chw(x, self.img_size)
         x = self._augment(x)
         x = (x - self.norm_mean) / self.norm_std
@@ -414,9 +428,6 @@ class GenusImageDataset(Dataset):
 
 
 class GenusTabularDataset(Dataset):
-    """
-    Wrap image dataset and add tabular features from dataframe columns.
-    """
     def __init__(self, image_dataset: GenusImageDataset, df: pd.DataFrame, tabular_cols: List[str]):
         self.image_dataset = image_dataset
         self.df = df.reset_index(drop=True).copy()
@@ -577,7 +588,6 @@ def parse_args():
 
     ap.add_argument("--percentile-normalize", action="store_true")
 
-    # normalization
     ap.add_argument(
         "--norm-mode",
         choices=["default", "estimate"],
@@ -587,7 +597,6 @@ def parse_args():
     ap.add_argument("--stats-max-samples", type=int, default=2000)
     ap.add_argument("--norm-stats-json", default=None, help="Optional JSON with mean/std to reuse at inference")
 
-    # imbalance + loss
     ap.add_argument("--sampler", choices=["none", "weighted"], default="none")
     ap.add_argument("--class-weights", choices=["off", "invfreq"], default="off")
     ap.add_argument("--loss", choices=["ce", "focal"], default="ce")
@@ -595,11 +604,9 @@ def parse_args():
     ap.add_argument("--alpha-mode", choices=["none", "scalar", "invfreq"], default="none")
     ap.add_argument("--alpha", type=float, default=0.25)
 
-    # split fallback
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=42)
 
-    # logging / early stopping
     ap.add_argument("--tensorboard", action="store_true")
     ap.add_argument("--early-stop-patience", type=int, default=10)
     ap.add_argument("--early-stop-min-delta", type=float, default=0.0)
@@ -622,7 +629,6 @@ def main():
     logger, csv_f, csv_w, tb = setup_logging(out_dir, args.tensorboard)
     logger.info("Args:\n" + json.dumps(vars(args), indent=2))
 
-    # labels
     if args.labels_csv is None:
         default_labels = Path(__file__).resolve().parents[3] / "conf" / "genus_labels.csv"
         labels_csv = default_labels
@@ -638,7 +644,6 @@ def main():
 
     logger.info(f"Loaded labels: K={num_classes} from {labels_csv}")
 
-    # image index
     images_dir = Path(args.images_dir)
     img_df = build_image_index(images_dir)
 
@@ -659,7 +664,6 @@ def main():
 
     logger.info(f"Images: train={len(train_df)} val={len(val_df)} classes={img_df['class_name'].nunique()}")
 
-    # tabular
     use_tabular = args.experiment == "multimodal"
     tab_cols: List[str] = []
 
@@ -679,7 +683,6 @@ def main():
         val_df = val_df.merge(ndvi_df, on="tree_id", how="left")
         logger.info(f"Multimodal enabled. Tabular cols: {tab_cols}")
 
-    # normalization stats
     if args.norm_stats_json:
         stats_path = Path(args.norm_stats_json)
         stats = json.loads(stats_path.read_text())
@@ -706,7 +709,6 @@ def main():
         json.dumps({"mean": norm_mean, "std": norm_std, "in_channels": args.in_channels}, indent=2)
     )
 
-    # datasets
     train_base = GenusImageDataset(
         train_df,
         img_size=args.img_size,
@@ -735,7 +737,6 @@ def main():
         train_set = train_base
         val_set = val_base
 
-    # loaders
     if args.sampler == "weighted":
         y_train = train_df["class_name"].map(class_to_id).to_numpy()
         class_counts = np.bincount(y_train, minlength=num_classes)
@@ -767,7 +768,6 @@ def main():
         pin_memory=True,
     )
 
-    # model
     device = torch.device(args.device)
     use_amp = device.type == "cuda"
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
@@ -791,7 +791,6 @@ def main():
     model = model.to(device)
     logger.info(f"Device: {device} | AMP: {use_amp} | Model: {args.backbone} | in_channels={args.in_channels}")
 
-    # loss
     y_train_ids = train_df["class_name"].map(class_to_id).to_numpy()
 
     if args.loss == "ce":
@@ -807,18 +806,19 @@ def main():
         loss_fn = FocalCrossEntropy(gamma=args.focal_gamma, alpha=alpha_vec, reduction="mean")
         logger.info(f"Loss: Focal (gamma={args.focal_gamma}, alpha_mode={args.alpha_mode})")
 
-    # optimizer / scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     total_steps = args.epochs * max(1, len(train_loader))
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-6)
 
-    # training
     ckpt_path = out_dir / f"{args.experiment}_best.pt"
     es = EarlyStop(args.early_stop_patience, args.early_stop_min_delta, args.early_stop_monitor)
 
     history: List[dict] = []
     best_state = None
     best_top1 = 0.0
+    best_epoch = 0
+    best_macro_f1 = 0.0
+    best_weighted_f1 = 0.0
     time_cum = 0.0
 
     try:
@@ -839,56 +839,9 @@ def main():
             lr = float(optimizer.param_groups[0]["lr"])
             best_top1 = max(best_top1, va_t1)
 
-            history.append(
-                dict(
-                    epoch=epoch,
-                    train_loss=tr_loss,
-                    train_top1=tr_t1,
-                    train_top5=tr_t5,
-                    val_loss=va_loss,
-                    val_top1=va_t1,
-                    val_top5=va_t5,
-                    time_s=dt,
-                    lr=lr,
-                )
-            )
-            pd.DataFrame(history).to_csv(out_dir / "history.csv", index=False)
-
-            logger.info(
-                f"Epoch {epoch:03d}/{args.epochs} | "
-                f"train loss={tr_loss:.4f} top1={tr_t1:.1f} top5={tr_t5:.1f} | "
-                f"val loss={va_loss:.4f} top1={va_t1:.1f} top5={va_t5:.1f} | "
-                f"{dt:.1f}s | lr={lr:.2e}"
-            )
-
-            log_epoch_csv(csv_w, epoch, time_cum, tr, (va_loss, va_t1, va_t5), lr)
-
-            if tb is not None:
-                tb.add_scalar("loss/train", tr_loss, epoch)
-                tb.add_scalar("loss/val", va_loss, epoch)
-                tb.add_scalar("acc_top1/train", tr_t1, epoch)
-                tb.add_scalar("acc_top1/val", va_t1, epoch)
-                tb.add_scalar("acc_top5/train", tr_t5, epoch)
-                tb.add_scalar("acc_top5/val", va_t5, epoch)
-                tb.add_scalar("lr", lr, epoch)
-
-            monitored_value = va_loss if es.monitor == "val_loss" else va_t1
-            is_better = (
-                es.best is None
-                or (es.monitor == "val_loss" and monitored_value < es.best - es.min_delta)
-                or (es.monitor == "val_top1" and monitored_value > es.best + es.min_delta)
-            )
-
-            if is_better:
-                best_state = {
-                    "model": model.state_dict(),
-                    "classes": id_to_class,
-                    "args": vars(args),
-                    "tabular_cols": tab_cols,
-                    "norm_mean": norm_mean,
-                    "norm_std": norm_std,
-                }
-                torch.save(best_state, ckpt_path)
+            val_macro_f1 = 0.0
+            val_weighted_f1 = 0.0
+            report = None
 
             if y_true.size and y_pred.size:
                 report = classification_report(
@@ -900,12 +853,80 @@ def main():
                     zero_division=0,
                     output_dict=True,
                 )
-                (out_dir / f"class_report_epoch{epoch:03d}.csv").write_text(
-                    pd.DataFrame(report).to_csv(index=True)
-                )
+                val_macro_f1 = float(report["macro avg"]["f1-score"])
+                val_weighted_f1 = float(report["weighted avg"]["f1-score"])
 
-                cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
-                plot_confusion(cm, id_to_class, out_dir / f"confusion_epoch{epoch:03d}.png")
+            history.append(
+                dict(
+                    epoch=epoch,
+                    train_loss=tr_loss,
+                    train_top1=tr_t1,
+                    train_top5=tr_t5,
+                    val_loss=va_loss,
+                    val_top1=va_t1,
+                    val_top5=va_t5,
+                    val_macro_f1=val_macro_f1,
+                    val_weighted_f1=val_weighted_f1,
+                    time_s=dt,
+                    lr=lr,
+                )
+            )
+            pd.DataFrame(history).to_csv(out_dir / "history.csv", index=False)
+
+            logger.info(
+                f"Epoch {epoch:03d}/{args.epochs} | "
+                f"train loss={tr_loss:.4f} top1={tr_t1:.1f} top5={tr_t5:.1f} | "
+                f"val loss={va_loss:.4f} top1={va_t1:.1f} top5={va_t5:.1f} "
+                f"macro_f1={val_macro_f1:.3f} weighted_f1={val_weighted_f1:.3f} | "
+                f"{dt:.1f}s | lr={lr:.2e}"
+            )
+
+            log_epoch_csv(csv_w, epoch, time_cum, tr, (va_loss, va_t1, va_t5), val_macro_f1, val_weighted_f1, lr)
+
+            if tb is not None:
+                tb.add_scalar("loss/train", tr_loss, epoch)
+                tb.add_scalar("loss/val", va_loss, epoch)
+                tb.add_scalar("acc_top1/train", tr_t1, epoch)
+                tb.add_scalar("acc_top1/val", va_t1, epoch)
+                tb.add_scalar("acc_top5/train", tr_t5, epoch)
+                tb.add_scalar("acc_top5/val", va_t5, epoch)
+                tb.add_scalar("f1_macro/val", val_macro_f1, epoch)
+                tb.add_scalar("f1_weighted/val", val_weighted_f1, epoch)
+                tb.add_scalar("lr", lr, epoch)
+
+            monitored_value = va_loss if es.monitor == "val_loss" else va_t1
+            is_better = (
+                es.best is None
+                or (es.monitor == "val_loss" and monitored_value < es.best - es.min_delta)
+                or (es.monitor == "val_top1" and monitored_value > es.best + es.min_delta)
+            )
+
+            if is_better:
+                best_epoch = epoch
+                best_macro_f1 = val_macro_f1
+                best_weighted_f1 = val_weighted_f1
+
+                best_state = {
+                    "model": model.state_dict(),
+                    "classes": id_to_class,
+                    "args": vars(args),
+                    "tabular_cols": tab_cols,
+                    "norm_mean": norm_mean,
+                    "norm_std": norm_std,
+                }
+                torch.save(best_state, ckpt_path)
+
+                if report is not None:
+                    report_df = pd.DataFrame(report).transpose()
+                    report_df.to_csv(out_dir / "class_report_best.csv", index=True)
+
+                    cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
+                    plot_confusion(cm, id_to_class, out_dir / "confusion_best.png")
+
+                logger.info(
+                    f"New best model at epoch {epoch:03d} | "
+                    f"val_top1={va_t1:.3f} | macro_f1={val_macro_f1:.3f} | weighted_f1={val_weighted_f1:.3f}"
+                )
 
             if es.step(monitored_value):
                 logger.info(f"Early stopping at epoch {epoch} (monitor={es.monitor}, best={es.best:.4f}).")
@@ -913,6 +934,7 @@ def main():
 
     except Exception as e:
         logger.error(f"Training failed: {e}", exc_info=True)
+        raise
 
     finally:
         if best_state is None and ckpt_path.exists():
@@ -923,7 +945,11 @@ def main():
             logger.info(f"Restored best weights from {ckpt_path}")
 
         plot_history_curves(history, out_dir)
-        logger.info(f"Done. Best val top1={best_top1:.2f}. Saved best checkpoint: {ckpt_path}")
+        logger.info(
+            f"Done. Best epoch={best_epoch} | best val top1={best_top1:.3f} | "
+            f"best macro_f1={best_macro_f1:.3f} | best weighted_f1={best_weighted_f1:.3f}. "
+            f"Saved best checkpoint: {ckpt_path}"
+        )
 
         csv_f.close()
         if tb is not None:

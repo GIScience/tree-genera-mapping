@@ -2,10 +2,12 @@
 """
 genus_eval.py
 
-Evaluate a saved genus classification checkpoint on the VAL split.
+Evaluate a saved genus classification checkpoint on the VAL/TEST split.
 
 Expected dataset layout:
   <images_dir>/val/<class_name>/*.tif
+  OR
+  <images_dir>/test/<class_name>/*.tif
 (or valid/validation instead of val)
 
 Outputs (in out_dir):
@@ -39,7 +41,7 @@ def _is_val_path(p: Path) -> bool:
 
 def collect_val_images(images_dir: Path) -> pd.DataFrame:
     """
-    Build dataframe for VAL split:
+    Build dataframe for VAL/TEST split:
       image_path, class_name
     Assumes class_name is parent folder of the tif file.
     """
