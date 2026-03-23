@@ -798,7 +798,7 @@ def main() -> None:
     ap_det.add_argument("--tile-id-col", default="tile_id")
     ap_det.add_argument("--label-col", default='genus',
                     help="Column in bboxes_gpkg containing class id (e.g. genus, top1_class)")
-    ap_det.add_argument("--classes-csv", default=None, help="CSV mapping (fid,genus)")
+    ap_det.add_argument("--classes-csv", default=None, help="CSV mapping (fid, genus)")
     ap_det.add_argument(
         "--unknown-class",
         default="skip",

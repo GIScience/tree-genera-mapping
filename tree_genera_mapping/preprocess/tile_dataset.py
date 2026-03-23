@@ -37,6 +37,7 @@ from tree_genera_mapping.preprocess.utils import normalize_hm_to_255
 warnings.filterwarnings("ignore", category=FutureWarning, module="pyogrio")
 
 logger = logging.getLogger(__name__)
+
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -51,7 +52,7 @@ class TileDataset:
         tile_id: str,
         output_dir: str,
         mode: str = "RGBIH",
-        norm_global: bool = False,
+        norm_global: bool = True,
         dop_path: Optional[str] = None,
         ndom_path: Optional[str] = None,
         dgm_path: Optional[str] = None,
@@ -68,7 +69,7 @@ class TileDataset:
 
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.output_path = self.output_dir / "merged" / f"{self.mode.lower()}_{tile_id}.tif"
+        self.output_path = self.output_dir / f"{self.mode.lower()}_{tile_id}.tif"
 
         self.temp_dir = Path(temp_dir) if temp_dir else None
 
@@ -136,8 +137,8 @@ class TileDataset:
           transform: rasterio Affine
           meta: rasterio profile dict
         """
-        if self.dop_path is None:
-            raise ValueError("dop_path is required")
+        if self.dop_path is None or not self.dop_path.exists():
+            raise FileNotFoundError(f"DOP path missing: {self.dop_path}")
 
         with rasterio.open(self.dop_path) as src:
             data = src.read()

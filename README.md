@@ -74,9 +74,9 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
       ```bash
       python -m tree_genera_mapping.scripts.build_dataset det \
           --tiles-gpkg data/lgl_bw_tiles.gpkg \
-          --bboxes-gpkg cache/weak_pseudo/pseudo_labels_v3.gpkg \
-          --images-dir cache/data/global \
-          --output-dir cache/data/det \
+          --bboxes-gpkg /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/labels_geodata/pseudo_labels_v3.gpkg \
+          --images-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/global \
+          --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/tmp \
           --mode rgbih \
           --tile-id-col tile_id \
           --label-col top1_class \
@@ -84,7 +84,7 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
           --unknown-class skip \
           --size 640 \
           --overlap 0.2 \
-          --tile-split-table data/tiles_split.txt  \
+          --tile-split-table data/tiles_split_city2.txt  \
           --subtile-split-table data/subtiles_ids.txt   \
           --include-empty-tiles \
           --plain-tiff \ # yolo_train.py only reads TIFF (Non-GeoTIFF)
