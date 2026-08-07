@@ -48,7 +48,7 @@ cd ../..
 ```
 
 How to run the pre-trained YOLOv11l model 5CH imagery
-1. DEMO with Jupyter NOtebook ...
+1. DEMO with Jupyter Notebook ...
 
 How to run the Genera Mapping scripts
 1. Download LGL products to Generate TileDataset for selected tile ids:
@@ -56,15 +56,19 @@ How to run the Genera Mapping scripts
 python tree_genera_mapping/scripts/fetch_tiles.py \
   --tiles-gpkg data/lgl_bw_tiles.gpkg \
   --tile-ids data/tiles_split.txt \
-  --tmp-root /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/tmp_tiles \
-  --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/global \
+  --tmp-root cache/tmp_dir \
+  --output-dir cache/img_dir \
   --mode RGBIH \
   --norm-height global
 ```
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
 ```bash
-python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg --images-dir cache/tiles_5ch --model-path cache/weights/yolov11l_tree_genus.pth --output-dir cache/initial_inference
+python tree_genera_mapping/scripts/predict_yolo.py \ 
+  --tiles-gpkg data/tiles.gpkg \
+  --images-dir cache/dataset_dir \
+  --model-path cache/yolov11l_tree_genus.pth \
+  --output-dir cache/predictions
 ```
 
 ## Train Model
@@ -74,9 +78,9 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
       ```bash
       python -m tree_genera_mapping.scripts.build_dataset det \
           --tiles-gpkg data/lgl_bw_tiles.gpkg \
-          --bboxes-gpkg /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/labels_geodata/pseudo_labels_v3.gpkg \
-          --images-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/global \
-          --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/tmp \
+          --bboxes-gpkg cache/curated_annotations.gpkg \
+          --images-dir cache/img_dir \
+          --output-dir cache/data \
           --mode rgbih \
           --tile-id-col tile_id \
           --label-col top1_class \
@@ -84,41 +88,24 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
           --unknown-class skip \
           --size 640 \
           --overlap 0.2 \
-          --tile-split-table data/tiles_split_city2.txt  \
+          --tile-split-table data/tiles_split_city.txt  \
           --subtile-split-table data/subtiles_ids.txt   \
           --include-empty-tiles \
-          --plain-tiff \ # yolo_train.py only reads TIFF (Non-GeoTIFF)
+          --plain-tiff \ #yolo_train.py only reads TIFF (Non-GeoTIFF)
       ```
       **Note**: `yolo_train.py` expects plain TIFF images (Non-GeoTIFF). If your source imagery is stored as GeoTIFF, run the dataset builder with the --plain-tiff flag so that geospatial metadata is removed during chip generation.
 
 
 
    ii. Classification dataset for Genus Prediction
-
-   ```bash
-    python -m tree_genera_mapping.scripts.build_dataset cls \
-     --tiles-gpkg data/lgl_bw_tiles.gpkg \
-     --genus-labels-csv /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/labels_geodata/greehill_genera.csv \
-     --split-csv data/greehill_genera_split.csv \
-     --images-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/tiles_rgbih/merged \
-     --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/cls \
-     --mode rgbih \
-     --class-col genus \
-     --tile-id-col tile_id \
-     --labels-tile-col tile_id \
-     --crop-mode fixed \
-     --x-col X \
-     --y-col Y \
-     --patch-size 128 
-   ```
    
    ```bash
      python -m tree_genera_mapping.scripts.build_dataset cls \
       --tiles-gpkg data/lgl_bw_tiles.gpkg \
-      --genus-labels-csv /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/labels_geodata/greehill_genera.csv \
+      --genus-labels-csv /greehill_genera.csv \
       --split-csv data/greehill_genera_split.csv \
-      --images-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/tiles_rgbih/merged \
-      --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/cls \
+      --images-dir cache/img_dir \
+      --output-dir cache/patches_dir \
       --mode rgbih \
       --class-col genus \
       --tile-id-col tile_id \
@@ -130,9 +117,17 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
    ```
    
 3. Run code
+3.1. Train YOLOv11l model for Genera detection
 ```bash
-    python -m tree_genera_mapping.dl.detection.yolo_train.py
+    python -m tree_genera_mapping.dl.detection.yolo_train.py \
+        --run-dir cache/models \
+        --data conf/data_genera.yaml \
+        --model-size l \
+        --batch 16 \
+        --epochs 200 \
+        --img-size 640 
 ```
+
 
 ## Model Checkpoints
 | Task                              | Model Name | Modification    | URL Link                                                                             |
@@ -141,10 +136,10 @@ python tree_genera_mapping/scripts/predict_yolo.py --tiles-gpkg data/tiles.gpkg 
 | Object Detection (tree)           | YOLO11l    | 5-Channel Input | [yolo11l_tree.pt](https://huggingface.co/solo2307/urban-tree-genera/tree/main)       |
 
 
-## Dataset & Paper
+## Dataset 
 This repository accompanies:
-- **Dataset**: {add}
-- **Paper**: {add}
+- **Dataset**: https://doi.org/10.11588/DATA/MKZPUY
+
 
 If you use this code or workflow, please cite the accompanying paper.
 See ```CITATION.cff``` for details.
