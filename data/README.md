@@ -1,47 +1,126 @@
 # Data
 
-This directory contains the **reference spatial grid** and **partition strategies** used by the project.
+This directory contains the **reference spatial grid**, the **class scheme** and the
+**partition tables** used throughout the project. Everything here is small enough to be
+version-controlled so that the published partitions are reproducible; bulk imagery and
+model outputs are written to `cache/`, which is git-ignored.
 
-## 1. Statewide Tiling for Data Acquisition  
+Coordinate reference system throughout: **EPSG:25832** (ETRS89 / UTM zone 32N).
 
-`tiles.gpkg` defines the complete set of spatial grid tiles and their
-unique identifiers used throughout the pipeline.
+## 1. Statewide tiling grid
 
-- Acts as the **authoritative tiling scheme**
-- Tile IDs are assumed to be stable and consistent
-- Used for training, inference, and post-processing
+`tiles.gpkg` defines the complete set of 1 km × 1 km grid tiles and their
+identifiers used at every stage of the pipeline.
 
-#### Data provenance
+- Acts as the **authoritative tiling scheme** for acquisition, training and inference.
+- Layer `imagery_tiling`; key columns `tile_id`, `dop_kachel`.
+- Also carries per-tile orthophoto acquisition metadata (`befliegung`, `kamera`, `linse`,
+  `flughoehe`, `farbtiefe`), which is the provenance record for each downloaded tile.
 
-The grid tiles correspond to the **LGL UrbanGreen tiling scheme** and are
-associated with the mapping of urban green spaces from multispectral
-aerial imagery and airborne LiDAR data.
+### Data provenance
 
-The underlying remote sensing data are provided by the  
-**LGL Open GeoData Portal (Baden-Württemberg)**:  
-https://www.lgl-bw.de/Produkte/Open-Data/
+The grid follows the **LGL Baden-Württemberg** tiling scheme for its open geodata
+products. The underlying remote-sensing data are distributed by the **LGL Open GeoData
+Portal**: https://www.lgl-bw.de/Produkte/Open-Data/ under Datenlizenz Deutschland –
+Namensnennung – 2.0 (dl-de/by-2-0), attribution `Datenquelle: LGL, www.lgl-bw.de`.
 
-Using this portal, users can download **1 × 1 km tiles** of:
-- very high resolution (VHR) **Multispectral** aerial **imagery** - **20cm spatial resolution**
-- **Height Model** derived from an airborne LiDAR - **1m spatial resolution**
+From that portal, 1 km × 1 km tiles can be downloaded of:
 
-These datasets are intended to be aligned with the grid defined in
-`tiles.gpkg`.
+- very-high-resolution multispectral aerial imagery (**DOP20**, RGB + NIR, 20 cm)
+- **nDOM** normalized digital surface model derived from airborne LiDAR (1 m)
+- **DOM1** / **DGM1** surface and terrain models (1 m), used to derive an alternative
+  height model
 
-#### Notes
+Note that the acquisition step retries neighbouring tiles (y−1, x−1, x−1/y−1) on HTTP 404,
+so the `dop_kachel` actually downloaded for a subtile may differ from the one requested.
 
-- The file (~14 MB) is intentionally included in the repository to ensure
-  reproducibility.
-- Coordinate reference system (CRS): `EPSG:25832`
+## 2. Genus taxonomy
 
-## 2. Genus Taxonomy
-`genera_labels.csv` - Mapping genus names into model labels
+`genera_labels.csv` maps genus names to model class ids. **This ordering is
+authoritative** — it is identical in `conf/data_genera.yaml` and in the `names` dictionary
+stored inside both released model checkpoints. Do not reorder it.
 
-## 3. Partition Strategies Files
-`tiles_split.txt` and  `tiles_split_city.txt` files contain parent-tile ids and partition status at tile- or city-levels
+| id | class | id | class |
+|----|-------|----|-------|
+| 0 | *Acer* | 5 | Other Deciduous |
+| 1 | *Aesculus* | 6 | *Platanus* |
+| 2 | *Carpinus* | 7 | *Prunus* |
+| 3 | Coniferous | 8 | *Quercus* |
+| 4 | *Fagus* | 9 | *Tilia* |
 
-## 4. Subtiles Files 
-`subtile_split.txt` - subtile_id, split mode, size and overlap arguments
+`Coniferous` and `Other Deciduous` are aggregate classes used where genus-level
+assignment from aerial imagery is not reliable. `preprocess/genus_labels.py` maps an
+arbitrary genus name onto this scheme: conifers to `Coniferous`, named genera to their own
+class, everything else to `Other Deciduous`.
 
-## 5. Image samples
-5-channel raster stack in `.tif` format for demo purpose in `data/samples` directroy.
+## 3. Partition tables
+
+A **single spatially blocked partition at the parent-tile level** is used throughout the
+workflow — teacher stage and student stage alike — so no tile ever contributes data to
+more than one partition.
+
+`tiles_split.txt` — columns `dop_kachel`, `tile_id`, `split`. The pooled tile-based split:
+
+| split | parent tiles | reference trees |
+|-------|--------------|-----------------|
+| train | 111 | 37,696 |
+| val | 14 | 2,719 |
+| test | 18 | 1,779 |
+| **total** | **143** | **42,194** |
+
+`tiles_split_city.txt` — the city-to-city generalization split, with Freiburg held out of
+training entirely. Used only for the domain-shift experiment.
+
+`greehill_genera_split.csv` — columns `tree_id`, `split`. The tree-level split induced by
+`tiles_split.txt`; every tree inherits its parent tile's partition. This is what the
+classification dataset builder consumes, which is why the genus classifier and the crown
+detector share one partition.
+
+`subtiles_split.txt` — columns `subtile_id`, `split`, `size`, `overlap`. 3,497 subtiles
+(2,934 train / 344 val / 219 test), each inheriting its parent tile's partition. This
+count includes negative subtiles with no annotated trees; the annotated subset is 2,965.
+
+`subtiles_ids.txt` — the plain list of subtile identifiers, for steps that need the
+inventory of subtiles without their partition.
+
+Both split tables can be regenerated with:
+
+```bash
+python -m tree_genera_mapping.scripts.make_splits \
+  --reference-csv data/greehill_genera.csv \
+  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --strategy tile --stratify-col city \
+  --out-tiles data/tiles_split.txt \
+  --out-trees data/greehill_genera_split.csv
+```
+
+Always pass a split table to `build_dataset`. The `--val-frac` / `--test-frac` fallbacks
+perform a **random** split and will not reproduce the published partition.
+
+## 4. Image samples
+
+`samples/` holds four 5-channel raster stacks in `.tif` format for demonstration and
+testing: 640 × 640 pixels, `uint8`, band order RGB, NIR, above-ground height. They allow
+the pretrained model to be exercised without any LGL download — see
+`notebooks/01_demo_inference.ipynb`.
+
+The height band is scaled per tile rather than on fixed bounds, so its byte values are not
+directly interpretable in metres; `predict_yolo.py` decodes them using the per-tile
+`raw_height_stats` recorded in the accompanying `.height.json` sidecar. See
+`docs/README.md` §3.1.
+
+## 5. Ancillary layers (not version-controlled)
+
+These are needed for the non-forest domain, the settlement flag and the aggregated
+indicators, and are downloaded separately because of their size:
+
+| file | object type | source | purpose |
+|------|-------------|--------|---------|
+| `geb01_f.shp` | `AX_Gebiet_Bundesland`, `AX_KommunalesGebiet` | Basis-DLM (LGL) | state boundary; municipality boundaries |
+| `veg02_f.shp` | `AX_Wald` | Basis-DLM (LGL) | forest areas erased from the mapping domain |
+| `sie01_f.shp` | `AX_Ortslage` | Basis-DLM (LGL) | contiguous settlement areas, for the settlement flag |
+| 100 m population grid | — | Zensus 2022, Statistisches Bundesamt | population and the spatial unit for diversity indicators |
+
+Basis-DLM layers are dl-de/by-2-0 with attribution `Datenquelle: LGL, www.lgl-bw.de`; the
+census grid is OpenData with attribution to the Statistisches Bundesamt, reference date
+15 May 2022.

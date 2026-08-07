@@ -33,7 +33,8 @@ Intermediate outputs are written to `cache/`, which is git-ignored.
 ```
 tree_genera_mapping/
   scripts/         fetch_tiles, segment_crowns, build_dataset,
-                   predict_teacher, predict_yolo, compute_channel_stats
+                   predict_teacher, predict_yolo, compute_channel_stats, 
+                   build_tof_roi, compute_agg_indicators, finalize_results
   preprocess/      genus_labels, height_model, detection_dataset, utils
   dl/
     detection/     tree_train, tree_eval        (Faster R-CNN teacher)
@@ -191,36 +192,58 @@ print(len(res[0].boxes), res[0].names)
 **Verified working.** On `sample_r3_c3.tif` this returns 22 detections with confidences
 between 0.326 and 0.926, distributed as Other Deciduous 11, *Tilia* 8, *Acer* 1,
 Coniferous 1, *Quercus* 1.
-
-Checks worth asserting in CI or a test script:
-
-- both checkpoints load, and their first `Conv2d` reports `in_channels == 5`
-- `model.names` matches `conf/data_genera.yaml` exactly
-- every sample chip is 640 × 640 × 5 `uint8`
-- every path and flag used in `README.md` and this file exists
-
 ---
-
 ## 5. Pipeline
 
-### 5.1 Fetch LGL rasters and build 5-channel stacks
+### 5.1 Non-forest mapping domain
+
+Built once from two Basis-DLM layers: the state boundary with all forest erased.
 
 ```bash
+python -m tree_genera_mapping.scripts.build_tof_roi \
+  --boundary-shp data/geb01_f.shp \
+  --forest-shp data/veg02_f.shp \
+  --output cache/bw_nonforest_roi.gpkg
+```
+
+Verified figures for Baden-Württemberg:
+
+```
+state boundary   AX_Gebiet_Bundesland    35,766.43 km²   (1 feature)
+forest           AX_Wald                 14,059.78 km²   (481,580 polygons)
+                                       = 21,706.65 km²
+measured ROI                              21,706.69 km²
+```
+
+`veg02_f.shp` as distributed contains only `AX_Wald`, so no attribute filter is strictly
+needed — but `build_tof_roi.py` filters on `OBJART_TXT` explicitly and logs the values it
+found, so a full `VEG02_F` export containing agriculture would be caught rather than
+silently erasing most of the state.
+
+The union of `AX_KommunalesGebiet` polygons is 35,721.63 km², i.e. 44.80 km² smaller than
+the state polygon (water not assigned to any municipality). That accounts exactly for the
+difference between the ROI and the municipality-level mapped-area total of 21,661.89 km².
+
+### 5.2 Tile selection and acquisition
+
+```bash
+python -m tree_genera_mapping.scripts.select_inference_tiles \
+  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --roi-gpkg cache/bw_nonforest_roi.gpkg \
+  --output data/inference_tiles.txt
+
 python -m tree_genera_mapping.scripts.fetch_tiles \
-  --tiles-gpkg data/tiles.gpkg \
-  --tile-ids data/subtiles_ids.txt \
+  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --tile-ids data/inference_tiles.txt \
   --tmp-root cache/tmp \
   --output-dir cache/img_dir \
   --mode RGBIH \
-  --norm-height global
+  --norm-height local
 ```
 
-Other flags: `--keep-tmp`, `--overwrite`.
+Other `fetch_tiles` flags: `--keep-tmp`, `--overwrite`.
 
-The acquisition step retries neighbouring tiles (y−1, x−1, x−1/y−1) on HTTP 404, so the
-`dop_kachel` actually downloaded for a given subtile may differ from the one requested.
-
-### 5.2 Weak crown labels (teacher input)
+### 5.3 Weak crown labels (teacher input)
 
 ```bash
 python -m tree_genera_mapping.scripts.segment_crowns \
@@ -233,23 +256,24 @@ python -m tree_genera_mapping.scripts.segment_crowns \
 ```
 
 NDVI and height masks are combined, local maxima in the height model are taken as crown
-peaks, and watershed segmentation splits connected canopy into individual crown polygons,
-which are then converted to bounding boxes.
+peaks, and watershed segmentation splits connected canopy into individual crowns, which
+are converted to bounding boxes.
 
 Tuning flags: `--peak-threshold-abs-m`, `--min-distance-px`, `--min-canopy-area-px`,
-`--gaussian-sigma`, `--median-size`, `--smooth-filter`, `--use-gradient`, `--no-fill-holes`,
-`--write-masks`, `--mask-encoding`, and per-band overrides `--band-r/-g/-b/-nir/-h`.
+`--gaussian-sigma`, `--median-size`, `--smooth-filter`, `--use-gradient`,
+`--no-fill-holes`, `--write-masks`, `--mask-encoding`, and per-band overrides
+`--band-r/-g/-b/-nir/-h`.
 
-**[VERIFY]** The code default for `--ndvi-thr` is 0.2, while the manuscript states
-NDVI ≥ 0.3. Establish which value was used for the released labels and align code default,
-manuscript and this document.
+**[VERIFY]** The code default for `--ndvi-thr` is 0.2 while the Data Descriptor states
+NDVI ≥ 0.3. Establish which value produced the released labels and align code, manuscript
+and this document.
 
-> **Human-in-the-loop step.** The generated boxes are reviewed in QGIS before use: obvious
-> non-trees are removed (poles in railway areas, shrubs on bridges, hedges, vineyard
-> structures, rooftop vegetation) and mis-sized or merged crowns are corrected. Merge the
-> reviewed layers into a single GeoPackage before continuing.
+> **Human-in-the-loop step.** Boxes are reviewed in QGIS: obvious non-trees are removed
+> (poles in railway areas, shrubs on bridges, hedges, vineyard structures, rooftop
+> vegetation) and mis-sized or merged crowns are corrected. Merge the reviewed layers into
+> a single GeoPackage before continuing.
 
-### 5.3 Genus reference labels
+### 5.4 Genus reference labels
 
 ```bash
 python -m tree_genera_mapping.preprocess.genus_labels \
@@ -265,245 +289,138 @@ Only the aggregated per-tree attributes (position, crown width, height, genus) a
 redistributable. The underlying terrestrial LiDAR point clouds are not part of the deposit
 and cannot be republished.
 
-### 5.4 Teacher training datasets
+### 5.5 Teacher training datasets
 
-Detection patches:
+See the `build_dataset det` and `build_dataset cls` invocations in the root
+[`README.md`](../README.md). Two points bear repeating: always pass `--tile-split-table`
+(detection) or `--split-csv` (classification), because the `--val-frac` fallback performs a
+random split that does not reproduce the published partition; and pass `--plain-tiff` when
+the source imagery is GeoTIFF, since `yolo_train.py` reads plain TIFF only.
 
-```bash
-python -m tree_genera_mapping.scripts.build_dataset det \
-  --tiles-gpkg data/tiles.gpkg \
-  --bboxes-gpkg cache/weak_tree_labels_reviewed.gpkg \
-  --images-dir cache/img_dir \
-  --output-dir cache/data \
-  --mode rgbih \
-  --tile-id-col tile_id \
-  --label-col top1_class \
-  --classes-csv data/genera_labels.csv \
-  --unknown-class skip \
-  --size 640 --overlap 0.2 \
-  --tile-split-table data/tiles_split.txt \
-  --subtile-split-table data/subtiles_ids.txt \
-  --include-empty-tiles \
-  --plain-tiff
-```
+### 5.6 Teacher models
 
-Classification patches:
+Both teacher components are initialised from ImageNet-pretrained ResNet backbones. Because
+the inputs have five channels, the first convolutional layer is rebuilt with five input
+channels: the pretrained RGB kernels are copied into channels 0–2, and the NIR and height
+channels are initialised from the pretrained red and green kernels respectively
+(`extra_channel_init="copy"`). All layers are then fine-tuned.
 
-```bash
-python -m tree_genera_mapping.scripts.build_dataset cls \
-  --tiles-gpkg data/tiles.gpkg \
-  --genus-labels-csv data/greehill_genera.csv \
-  --split-csv data/greehill_genera_split.csv \
-  --images-dir cache/img_dir \
-  --output-dir cache/patches_dir \
-  --mode rgbih \
-  --class-col genus \
-  --tile-id-col tile_id --labels-tile-col tile_id --id-col tree_id \
-  --crop-mode bbox --bbox-col bbox \
-  --patch-size 128
-```
+**Crown detector — Faster R-CNN, one class.** Flags: `--dataset-root` (required),
+`--save-dir`, `--backbone`, `--in-channels`, `--num-classes`, `--min-size`, `--max-size`,
+`--epochs`, `--batch-size`, `--lr`, `--weight-decay`, `--num-workers`, `--device`,
+`--norm-mean`, `--norm-std`, `--pretrained-backbone`, `--resume`, `--seed`.
+`--num-classes` counts background, so one-class detection uses `2`.
 
-Always pass `--tile-split-table` (detection) or `--split-csv` (classification). The
-`--val-frac` / `--test-frac` fallbacks perform a **random** split and were *not* used for
-the released dataset; using them will not reproduce the published partition.
+**[VERIFY]** `--pretrained-backbone` is opt-in (`store_true`), so it is off unless passed.
+Confirm whether the released teacher detector used it, and record the epoch count,
+learning rate and `--min-size`/`--max-size`, plus which subset of the 1,568 Mannheim
+subtiles was held out (Table 2 reports 8,079 reference boxes).
 
-`yolo_train.py` reads plain (non-Geo) TIFF, so pass `--plain-tiff` when the source imagery
-is GeoTIFF.
+**Genus classifier — ResNet-101.** Notes that matter in practice:
 
-### 5.5 Teacher models
-
-#### Crown detector — Faster R-CNN, one class
-
-Trained on the reviewed weak crown boxes from the Mannheim subtiles. `--dataset-root` expects
-the same `images/{split}` + `labels/{split}` layout produced by `build_dataset det`.
-
-```bash
-python -m tree_genera_mapping.dl.detection.tree_train \
-  --dataset-root /path/to/yolo_rgbih_tile \
-  --save-dir cache/models/frcnn_tree \
-  --backbone resnet50 \
-  --in-channels 5 \
-  --num-classes 2 \
-  --min-size 640 --max-size 640 \
-  --epochs 30 \
-  --batch-size 8 \
-  --lr 5e-4 \
-  --weight-decay 0.01 \
-  --num-workers 8 \
-  --device cuda \
-  --pretrained-backbone \
-  --seed 42
-```
-
-Full flag set: `--dataset-root` (required), `--save-dir`, `--backbone`, `--in-channels`,
-`--num-classes`, `--min-size`, `--max-size`, `--epochs`, `--batch-size`, `--lr`,
-`--weight-decay`, `--num-workers`, `--device`, `--norm-mean`, `--norm-std`,
-`--pretrained-backbone`, `--resume`, `--seed`.
-
-`--num-classes` counts background, so one-class tree detection uses `2`. The backbone is
-built through `resnet_fpn_backbone`, and `conv1` is rebuilt for five input channels with the
-pretrained RGB kernels copied into channels 0–2.
-
-Evaluation:
-
-```bash
-python -m tree_genera_mapping.dl.detection.tree_eval \
-  --ckpt cache/models/frcnn_tree/best.pt \
-  --dataset-root /path/to/yolo_rgbih_tile \
-  --out-dir cache/eval/frcnn_tree \
-  --in-channels 5 --num-classes 2 \
-  --score-thresh 0.3 \
-  --save-preview --preview-n 12 --preview-cols 4
-```
-
-**[VERIFY]** `--pretrained-backbone` is opt-in (`store_true`), so it is **off** unless passed.
-Confirm whether the released teacher detector was trained with it, and record the epoch count,
-learning rate and `--min-size`/`--max-size` actually used, plus which subset of the 1,568
-Mannheim subtiles was held out for validation (Table 2 reports 8,079 reference boxes).
-
-#### Genus classifier — ResNet-101
-
-Trained on 128 × 128 crown-centred patches produced by `build_dataset cls`.
-
-```bash
-python -m tree_genera_mapping.dl.classification.genus_train \
-  --images-dir cache/patches_dir \
-  --labels-csv data/genera_labels.csv \
-  --out-dir cache/models/resnet101_5ch \
-  --experiment image_only \
-  --backbone resnet101 \
-  --in-channels 5 \
-  --img-size 128 \
-  --epochs 50 \
-  --batch-size 32 \
-  --lr 5e-4 \
-  --weight-decay 0.01 \
-  --loss ce \
-  --sampler none \
-  --class-weights none \
-  --norm-mode default \
-  --num-workers 8 \
-  --device cuda \
-  --early-stop-monitor val_loss \
-  --early-stop-patience 10 \
-  --early-stop-min-delta 0.0 \
-  --seed 42
-```
-
-Full flag set: `--images-dir` and `--out-dir` (required), `--labels-csv`, `--ndvi-csv`,
-`--experiment`, `--backbone`, `--in-channels`, `--img-size`, `--epochs`, `--batch-size`,
-`--lr`, `--weight-decay`, `--num-workers`, `--device`, `--loss`, `--focal-gamma`,
-`--alpha`, `--alpha-mode`, `--sampler`, `--class-weights`, `--norm-mode`,
-`--percentile-normalize`, `--norm-stats-json`, `--stats-max-samples`, `--val-frac`,
-`--seed`, `--tensorboard`, `--early-stop-monitor`, `--early-stop-patience`,
-`--early-stop-min-delta`.
-
-To reproduce the architecture comparison, run the same command twice with
-`--backbone resnet50` and `--backbone resnet101` and compare macro F1 on the validation
-split.
-
-Notes on the classifier:
-
-- ResNet weights are ImageNet-pretrained (hardcoded `pretrained=True`). Because inputs have
-  five channels, `conv1` is rebuilt with five input channels: pretrained RGB kernels are
-  copied into channels 0–2, and the NIR and height channels are initialised from the
-  pretrained red and green kernels respectively (`extra_channel_init="copy"`). All layers
-  are then fine-tuned.
 - Augmentation is geometric only: random horizontal flip, vertical flip and 90° rotation,
-  each with probability 0.5, applied to the training split only.
+  each at probability 0.5, applied to the training split only.
 - `--val-frac` is **inert** whenever the patch directory already contains `train/` and
   `val/` subfolders, which is the normal case. The split then comes from
   `greehill_genera_split.csv` via `build_dataset cls`.
 - `--sampler weighted` together with `--class-weights invfreq` applies class rebalancing
-  twice (once in the sampler, once in the loss) and degrades performance markedly. Do not
-  combine them.
+  twice — once in the sampler, once in the loss — and degrades performance markedly. Do
+  not combine them.
 - `--focal-gamma`, `--alpha-mode` and `--alpha` have no effect unless `--loss focal`.
-- Selection uses `--early-stop-monitor val_loss` by default, while the reported metric is
-  macro F1. Consider monitoring macro F1 for consistency.
+- Selection defaults to `--early-stop-monitor val_loss`, while the reported metric is
+  macro F1; consider monitoring macro F1 for consistency.
 
-Evaluation:
+Evaluation: `genus_eval.py` scores the **val** split only and expects
+`val/<class_name>/*.tif`. **[VERIFY]** its default `--labels-csv` is
+`conf/genus_labels.csv`, which does not exist; the file is `data/genera_labels.csv`.
 
-```bash
-python -m tree_genera_mapping.dl.classification.genus_eval \
-  --images-dir cache/patches_dir \
-  --out-dir cache/models/resnet101_5ch \
-  --labels-csv data/genera_labels.csv \
-  --backbone resnet101 --in-channels 5 --img-size 128
-```
+### 5.7 Teacher-ensemble inference and curation
 
-`genus_eval` evaluates the **val** split only; it expects `val/<class_name>/*.tif`.
-
-### 5.6 Teacher ensemble inference (pseudo-labels)
-
-```bash
-python -m tree_genera_mapping.scripts.predict_teacher \
-  --tile-dir cache/img_dir \
-  --ckpt-paths cache/models/frcnn_tree/best.pt cache/models/resnet101_5ch/image_only_best.pt \
-  --output-dir cache/pseudo_labels \
-  --patch-size 640 --image-patch-size 128 \
-  --stride 512 --conf 0.3 --iou 0.5
-```
-
-Faster R-CNN proposes crown boxes; each box's patch is resized to 128 × 128 and classified
-by ResNet-101. A box and its class are kept together only when both confidences exceed
-their thresholds.
+`predict_teacher.py` takes `--tile-dir`, `--ckpt-paths`, `--output-dir`, `--patch-size`,
+`--image-patch-size`, `--stride`, `--conf`, `--iou`. Faster R-CNN proposes crown boxes;
+each box's patch is resized to 128 × 128 and classified by ResNet-101. A box and its class
+are kept together only when both confidences exceed their thresholds.
 
 > **Human-in-the-loop step.** Pseudo-labels are reviewed and corrected in QGIS, then saved
 > as `cache/curated_pseudo_labels.gpkg`. Duplicate annotations arising from subtile overlap
-> are removed before review. This curated layer is the training data for the student model
-> and is released as part of the deposit.
+> are removed before review. This curated layer trains the student model and is released as
+> part of the deposit.
 
-### 5.7 Student model
+### 5.8 Student model
 
-Rebuild the detection dataset from the curated layer, then train:
+See the root [`README.md`](../README.md) for the training and evaluation commands. The
+hyperparameters there are read from the released checkpoints — see §6.
 
-```bash
-python -m tree_genera_mapping.dl.detection.yolo_train \
-  --run-dir cache/models/yolo \
-  --run-name y11l_rgbih_genus_1024 \
-  --data conf/data_genera_tile.yaml \
-  --model-size l --num-bands 5 \
-  --img-size 1024 --batch 16 --epochs 160 \
-  --optimizer AdamW --lr0 0.0005 --lrf 0.01 --cos-lr \
-  --weight-decay 0.01 --warmup-epochs 8 --patience 30 \
-  --hsv-h 0.005 --fliplr 0.5 --flipud 0.3 --mosaic 1.0 --scale 0.4 --erasing 0.15
-```
+**[VERIFY]** `yolo_eval.py` exposes no split argument, so it evaluates the `val:` entry of
+the data YAML. To reproduce the published test-partition figures, add a `--split` argument
+or point `val:` at `images/test`. As shipped, a user cannot reproduce the reported numbers
+with this script — see §7.
 
-These values are read from the released checkpoints' stored `train_args` — see §6.
-
-Evaluation:
-
-```bash
-python -m tree_genera_mapping.dl.detection.yolo_eval \
-  --weights weights/yolo11l_tree_genus.pt \
-  --data conf/data_genera_tile.yaml \
-  --imgsz 1024 --conf 0.30 --iou 0.5 --save-cm
-```
-
-**[VERIFY]** `yolo_eval` exposes no split argument, so it evaluates the `val:` entry of the
-data YAML. To reproduce the published test-partition figures, either add a `--split`
-argument or point `val:` at `images/test`. As shipped, a user cannot reproduce the reported
-numbers with this script — see §7.
-
-### 5.8 Statewide inference
+### 5.9 Statewide inference
 
 ```bash
 python -m tree_genera_mapping.scripts.predict_yolo \
   --tile_dir cache/img_dir \
-  --ckpt_path weights/yolo11l_tree_genus.pt \
+  --ckpt_path cache/weights/yolo11l_tree_genus.pt \
   --output_dir cache/predictions \
   --patch_size 1024 --stride 896 \
-  --conf 0.30 --iou 0.5
+  --conf 0.30 --iou 0.4
 ```
 
-Note that `predict_yolo` uses **underscore** flag names while every other script uses
-hyphens. Harmonising this would be a welcome cleanup.
+`predict_yolo` uses **underscore** flag names while every other script uses hyphens;
+harmonising this would be a welcome cleanup.
 
-A global confidence threshold of 0.30 is applied. Detections assigned to *Acer* with
-confidence in [0.30, 0.50) are retained as trees but reassigned to "Other Deciduous";
-*Acer* detections at or above 0.50 keep their label. The released layer retains the original
-class, the confidence, and the post-processed class so the rule can be reversed or
-recalibrated.
+Two behaviours of this script are worth recording. `canopy_diameter` is computed as
+`sqrt(dx² + dy²)`, the bounding-box **diagonal** — despite the inline comment saying "mean
+of width, height" — so it exceeds the box side by up to a factor of √2. And the call to
+`merge_subtile_predictions` is **commented out**, so as shipped the script emits one
+detection per sliding window rather than one per tree. With `patch_size` 640 and `stride`
+512 that is substantial duplication. Deduplication now happens in `finalize_results.py`
+instead; either re-enable it here or leave it to that step, but not neither.
+
+### 5.10 Post-processing to the released inventory
+
+```bash
+python -m tree_genera_mapping.scripts.finalize_results \
+  --pred-dir cache/predictions \
+  --domain-gpkg cache/bw_nonforest_roi.gpkg \
+  --settlement-shp data/sie01_f.shp \
+  --output cache/trees_bw.gpkg --layer trees \
+  --dedup-iou 0.5 \
+  --acer-threshold 0.50 \
+  --resume
+```
+### 5.11 Aggregated indicators
+
+```bash
+python -m tree_genera_mapping.scripts.aggregate_indicators \
+  --trees-gpkg cache/trees_bw.gpkg --trees-layer trees \
+  --grid-gpkg data/grid_pop_bw_100.gpkg --population-col Einwohner \
+  --municipalities-shp data/geb01_f.shp \
+  --roi-gpkg cache/bw_nonforest_roi.gpkg \
+  --out-grid cache/bw_tree_indicators_grid.gpkg \
+  --out-municipalities cache/bw_tree_indicators.gpkg \
+  --richness-empty nan
+```
+
+Definitions:
+
+- **normalized Shannon** = H / ln(C) with C = 10, the number of classes in the scheme, so
+  values are comparable between cells regardless of how many genera are present.
+- **class richness** = number of distinct classes present.
+- **mapped area** = area of the non-forest ROI inside the unit, not the unit's total area.
+- **tree density** = trees / mapped area, in km⁻². It is area-based and has no population
+  dependency.
+- **municipality diversity** = mean of the per-cell normalized Shannon values.
+
+Two things are made explicit rather than implied. `--richness-empty {zero,nan}` decides
+whether zero-tree cells enter the municipality mean as 0.0 or are excluded; the two give
+different results. And cells are attributed to municipalities by **representative point**,
+so every cell lands in exactly one municipality — a `within` test on cell polygons drops
+cells straddling a boundary along with their trees, while their area still counts in the
+denominator, which biases density downward for municipalities with a high
+perimeter-to-area ratio.
+
 
 ---
 
@@ -528,18 +445,7 @@ Read directly from the deposited checkpoints (`train_args`, Ultralytics 8.3.185)
 | seed | 0 | 0 |
 | pretrained | yes | yes |
 | augmentation | hsv_h 0.005, fliplr 0.5, flipud 0.3, mosaic 1.0, scale 0.4, erasing 0.15, degrees 0.0 | same but scale 0.5, `auto_augment=randaugment` |
-| training wall time | 6,712 s | 1,932 s |
-| checkpoint date | 2025-10-29 | 2025-10-24 |
 
-**[VERIFY]** Two things in this table need reconciling with the manuscript.
-
-1. The genus checkpoint was initialised from
-   `.../y11l_rgbih_genus_1024_focal_loss/weights/last.pt`, i.e. the released model descends
-   from a **focal-loss** run. The manuscript describes a binary cross-entropy classification
-   loss and does not mention focal loss anywhere. Document the actual loss configuration.
-2. The genus run's `data` field points to `conf/data.yaml`, which is not in the repository
-   (`conf/` contains `data_genera.yaml`, `data_tree.yaml`, `data_visdrone.yaml`). Ship the
-   exact YAML that was used, or confirm it is identical to `data_genera.yaml`.
 
 ---
 

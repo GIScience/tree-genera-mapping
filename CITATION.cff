@@ -2,27 +2,59 @@
 # Visit https://bit.ly/cffinit to generate yours today!
 
 cff-version: 1.2.0
-title: 'Tree Genera Mapping: Urban Tree Crown Detection & Genus Mapping of Baden-Württemberg, Germany'
+title: 'Tree Genera Mapping: Urban Tree Crown Detection and Genus Mapping of Baden-Württemberg, Germany'
 message: >-
-  If you use this dataset, please cite it using the metadata
-  from this file.
-type: dataset
+  If you use this software, please cite both the software itself and the
+  accompanying Data Descriptor given under preferred-citation.
+type: software
 authors:
   - given-names: Yulia
     family-names: Grinblat
-    name-suffix: Dr.
     email: yulia.grinblat@heigit.org
+    affiliation: HeiGIT gGmbH / Heidelberg University
+    orcid: 'https://orcid.org/0000-0000-0000-0000'
   - given-names: Nir
     family-names: Fulman
-    name-suffix: Dr.
     email: nir.fulman@uni-heidelberg.de
-date-released: 2026-01-26
-url: "https://github.com/GIScience/tree-genera-mapping"
+    affiliation: HeiGIT gGmbH / Heidelberg University
+    orcid: 'https://orcid.org/0000-0000-0000-0000'
+date-released: '2026-01-26'
+version: 1.0.0
+url: 'https://github.com/GIScience/tree-genera-mapping'
+repository-code: 'https://github.com/GIScience/tree-genera-mapping'
 license: AGPL-3.0
-repository-code: "https://github.com/GIScience/tree-genera-mapping"
 keywords:
-  - "YOLOv11"
-  - "Tree detection"
-  - "Genera Classification"
-  - "Remote sensing"
-  - "Deep learning"
+  - YOLO11
+  - tree detection
+  - genus classification
+  - trees outside forests
+  - remote sensing
+  - deep learning
+  - Baden-Württemberg
+identifiers:
+  - type: doi
+    value: 10.11588/DATA/MKZPUY
+    description: Dataset produced with this software, published in heiDATA
+preferred-citation:
+  type: article
+  title: >-
+    A genus-labeled dataset of individual trees outside forests in
+    Baden-Württemberg, Germany
+  authors:
+    - given-names: Yulia
+      family-names: Grinblat
+    - given-names: Heike
+      family-names: Tost
+    - given-names: Anastasja
+      family-names: Benedyc
+    - given-names: Andreas
+      family-names: Meyer-Lindenberg
+    - given-names: Somidh
+      family-names: Saha
+    - given-names: Alexander
+      family-names: Zipf
+    - given-names: Nir
+      family-names: Fulman
+  journal: Scientific Data
+  year: 2026
+  doi: 10.0000/PLACEHOLDER
