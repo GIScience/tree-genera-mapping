@@ -4,7 +4,7 @@ This directory contains the **reference spatial grid** and **partition strategie
 
 ## 1. Statewide Tiling for Data Acquisition  
 
-`lgl_bw_tiles.gpkg` defines the complete set of spatial grid tiles and their
+`tiles.gpkg` defines the complete set of spatial grid tiles and their
 unique identifiers used throughout the pipeline.
 
 - Acts as the **authoritative tiling scheme**
@@ -26,7 +26,7 @@ Using this portal, users can download **1 × 1 km tiles** of:
 - **Height Model** derived from an airborne LiDAR - **1m spatial resolution**
 
 These datasets are intended to be aligned with the grid defined in
-`lgl_bw_tiles.gpkg`.
+`tiles.gpkg`.
 
 #### Notes
 

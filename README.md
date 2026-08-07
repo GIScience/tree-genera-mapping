@@ -54,7 +54,7 @@ cd ../..
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
 python tree_genera_mapping/scripts/fetch_tiles.py \
-  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --tiles-gpkg data/tiles.gpkg \
   --tile-ids data/tiles_split.txt \
   --tmp-root cache/tmp_dir \
   --output-dir cache/img_dir \
@@ -77,7 +77,7 @@ python tree_genera_mapping/scripts/predict_yolo.py \
    i. Prepare detection dataset for Genera Mapping
       ```bash
       python -m tree_genera_mapping.scripts.build_dataset det \
-          --tiles-gpkg data/lgl_bw_tiles.gpkg \
+          --tiles-gpkg data/tiles.gpkg \
           --bboxes-gpkg cache/curated_annotations.gpkg \
           --images-dir cache/img_dir \
           --output-dir cache/data \
@@ -101,7 +101,7 @@ python tree_genera_mapping/scripts/predict_yolo.py \
    
    ```bash
      python -m tree_genera_mapping.scripts.build_dataset cls \
-      --tiles-gpkg data/lgl_bw_tiles.gpkg \
+      --tiles-gpkg data/tiles.gpkg \
       --genus-labels-csv /greehill_genera.csv \
       --split-csv data/greehill_genera_split.csv \
       --images-dir cache/img_dir \
