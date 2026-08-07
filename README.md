@@ -116,8 +116,7 @@ python tree_genera_mapping/scripts/predict_yolo.py \
       --patch-size 128 
    ```
    
-3. Run code
-3.1. Train YOLOv11l model for Genera detection
+3. Train Ultralytics YOLO model for Genera Detection
 ```bash
     python -m tree_genera_mapping.dl.detection.yolo_train.py \
         --run-dir cache/models \
