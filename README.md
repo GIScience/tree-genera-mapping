@@ -46,11 +46,11 @@ wget https://huggingface.co/solo2307/urban-tree-genera/blob/main/yolo11l_tree_ge
 wget https://huggingface.co/solo2307/urban-tree-genera/resolve/main/yolo11l_tree.pt
 cd ../..
 ```
+## Usage:
+### Demo of the pretrained model 
+`notebooks/01_demo_inference.ipynb` provides a step-by-step demonstration of the genera predictions over `data/samples` 5-stack images. 
 
-How to run the pre-trained YOLOv11l model 5CH imagery
-1. DEMO with Jupyter Notebook ...
-
-How to run the Genera Mapping scripts
+### How to run the Genera Mapping scripts
 1. Download LGL products to Generate TileDataset for selected tile ids:
 ```bash
 python tree_genera_mapping/scripts/fetch_tiles.py \
