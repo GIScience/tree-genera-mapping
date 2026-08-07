@@ -127,6 +127,9 @@ python tree_genera_mapping/scripts/predict_yolo.py \
         --img-size 640 
 ```
 
+More details on the script in `docs/README.md` 
+
+
 
 ## Model Checkpoints
 | Task                              | Model Name | Modification    | URL Link                                                                             |
