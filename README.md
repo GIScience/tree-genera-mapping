@@ -56,8 +56,8 @@ How to run the Genera Mapping scripts
 python tree_genera_mapping/scripts/fetch_tiles.py \
   --tiles-gpkg data/lgl_bw_tiles.gpkg \
   --tile-ids data/tiles_split.txt \
-  --tmp-root cache/tmp_tiles \
-  --output-dir cache/data/global \
+  --tmp-root /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/tmp_tiles \
+  --output-dir /mnt/sds-hd/sd17f001/ygrin/silverways/greenspaces/experiments_datasets/global \
   --mode RGBIH \
   --norm-height global
 ```
