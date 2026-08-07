@@ -91,7 +91,7 @@ python tree_genera_mapping/scripts/predict_yolo.py \
           --tile-split-table data/tiles_split_city.txt  \
           --subtile-split-table data/subtiles_ids.txt   \
           --include-empty-tiles \
-          --plain-tiff \ #yolo_train.py only reads TIFF (Non-GeoTIFF)
+          --plain-tiff  
       ```
       **Note**: `yolo_train.py` expects plain TIFF images (Non-GeoTIFF). If your source imagery is stored as GeoTIFF, run the dataset builder with the --plain-tiff flag so that geospatial metadata is removed during chip generation.
 
@@ -140,7 +140,7 @@ More details on the script in `docs/README.md`
 
 ## Dataset 
 This repository accompanies:
-- **Dataset**: https://doi.org/10.11588/DATA/MKZPUY
+- **Dataset**: `https://doi.org/10.11588/DATA/MKZPUY` 
 
 
 If you use this code or workflow, please cite the accompanying paper.
