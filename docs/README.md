@@ -239,7 +239,7 @@ python -m tree_genera_mapping.scripts.fetch_tiles \
   --tmp-root cache/tmp \
   --output-dir cache/img_dir \
   --mode RGBIH \
-  --norm-height local
+  --norm-height global
 ```
 
 Other `fetch_tiles` flags: `--keep-tmp`, `--overwrite`.

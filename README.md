@@ -42,7 +42,7 @@ Download the pretrained model (5ch) with weights
 ```bash
 mkdir -p cache/weights
 cd cache/weights
-wget https://huggingface.co/solo2307/urban-tree-genera/blob/main/yolo11l_tree_genus.pt
+wget https://huggingface.co/solo2307/urban-tree-genera/resolve/main/yolo11l_tree_genus.pt
 wget https://huggingface.co/solo2307/urban-tree-genera/resolve/main/yolo11l_tree.pt
 cd ../..
 ```
@@ -85,7 +85,7 @@ for `finalize_results.py`.
       ```bash
       python -m tree_genera_mapping.scripts.build_dataset det \
           --tiles-gpkg data/tiles.gpkg \
-          --bboxes-gpkg cache/curated_annotations.gpkg \
+          --bboxes-gpkg cache/curated_pseudo_labels.gpkg \
           --images-dir cache/img_dir \
           --output-dir cache/data \
           --mode rgbih \
