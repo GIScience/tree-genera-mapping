@@ -335,8 +335,8 @@ run so that its detector checkpoint can be reproduced.
   macro F1; consider monitoring macro F1 for consistency.
 
 Evaluation: `genus_eval.py` scores the **val** split only and expects
-`val/<class_name>/*.tif`. Pass `--labels-csv data/genera_labels.csv` explicitly; the
-script's default path, `conf/genus_labels.csv`, is not present in this repository.
+`val/<class_name>/*.tif`. Its label mapping defaults to `data/genera_labels.csv`; use
+`--labels-csv` only to override that file.
 
 ### 5.7 Teacher-ensemble inference and curation
 
@@ -534,11 +534,9 @@ bit-exactly.
 2. `conf/data.yaml` referenced by the released genus checkpoint is absent from the repo.
 3. Focal loss in the released genus model is undocumented in the manuscript.
 4. `yolo_eval` has no split selector.
-5. `genus_eval` defaults to `conf/genus_labels.csv`, which does not exist — the label file is
-   `data/genera_labels.csv`.
-6. The per-class reference counts published in the Data Descriptor's class-specific
+5. The per-class reference counts published in the Data Descriptor's class-specific
     performance table (total 9,663) do not match the deposited test partition (total 9,042;
     see §3.4). Since the dataset is released, this is checkable by any reader. Recompute the
     table from the released test split or state which dataset version produced it.
-7. `yolo_rgbih_tile/` ships no data YAML, so the released dataset cannot be used with
+6. `yolo_rgbih_tile/` ships no data YAML, so the released dataset cannot be used with
     `yolo_train` or `yolo_eval` without the user writing one (§3.4). Include it in the deposit.
