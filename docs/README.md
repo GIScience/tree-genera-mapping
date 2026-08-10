@@ -274,6 +274,11 @@ the NDVI ≥ 0.3 threshold in the Data Descriptor.
 
 ### 5.4 Genus reference labels
 
+`greehill_genera.csv` is distributed through the
+[heiDATA dataset](https://doi.org/10.11588/DATA/MKZPUY), not through this Git
+repository. Download it and save it as `data/greehill_genera.csv` before running
+the following command.
+
 ```bash
 python -m tree_genera_mapping.preprocess.genus_labels \
   --trees data/greehill_genera.csv \
@@ -383,23 +388,25 @@ split argument. To evaluate the test partition, use a separate evaluation YAML w
 
 ```bash
 python -m tree_genera_mapping.scripts.predict_yolo \
-  --tile_dir cache/img_dir \
-  --ckpt_path cache/weights/yolo11l_tree_genus.pt \
-  --output_dir cache/predictions \
-  --patch_size 1024 --stride 896 \
+  --tile-dir cache/img_dir \
+  --ckpt-path cache/weights/yolo11l_tree_genus.pt \
+  --output-dir cache/predictions \
+  --patch-size 1024 --stride 896 --imgsz 1024 \
   --conf 0.30 --iou 0.4
 ```
 
-`predict_yolo` uses **underscore** flag names while every other script uses hyphens;
-harmonising this would be a welcome cleanup.
+Omitting `--tile-id` processes every TIFF under `--tile-dir`. Hyphenated flags are
+preferred; the former underscore spellings remain available as compatibility aliases.
+Each input produces `tile_<tile_id>.gpkg` with the column schema consumed by
+`finalize_results.py`.
 
 Two behaviours of this script are worth recording. `canopy_diameter` is computed as
 `sqrt(dx² + dy²)`, the bounding-box **diagonal** — despite the inline comment saying "mean
 of width, height" — so it exceeds the box side by up to a factor of √2. And the call to
 `merge_subtile_predictions` is **commented out**, so as shipped the script emits one
 detection per sliding window rather than one per tree. With `patch_size` 640 and `stride`
-512 that is substantial duplication. Deduplication now happens in `finalize_results.py`
-instead; either re-enable it here or leave it to that step, but not neither.
+512 that is substantial duplication. Deduplication is performed once, in
+`finalize_results.py`, so the predictor intentionally retains all window detections.
 
 ### 5.10 Post-processing to the released inventory
 
@@ -523,20 +530,15 @@ bit-exactly.
 
 ## 9. Open items
 
-1. Height-channel encoding of the sample chips (§3.1).
-2. `training_class` ordering in `greehill_genera.csv` versus the model's class order (§3.2).
-3. `conf/data.yaml` referenced by the released genus checkpoint is absent from the repo.
-4. Focal loss in the released genus model is undocumented in the manuscript.
-5. `yolo_eval` has no split selector.
-6. `predict_yolo` uses underscore flags; all other scripts use hyphens.
-7. `genus_eval` defaults to `conf/genus_labels.csv`, which does not exist — the label file is
+1. `training_class` ordering in `greehill_genera.csv` versus the model's class order (§3.2).
+2. `conf/data.yaml` referenced by the released genus checkpoint is absent from the repo.
+3. Focal loss in the released genus model is undocumented in the manuscript.
+4. `yolo_eval` has no split selector.
+5. `genus_eval` defaults to `conf/genus_labels.csv`, which does not exist — the label file is
    `data/genera_labels.csv`.
-
-8. `scripts/finalize_results.py`, referenced in older documentation, does not exist. Either
-    add it or document how predictions are merged and exported.
-11. The per-class reference counts published in the Data Descriptor's class-specific
+6. The per-class reference counts published in the Data Descriptor's class-specific
     performance table (total 9,663) do not match the deposited test partition (total 9,042;
     see §3.4). Since the dataset is released, this is checkable by any reader. Recompute the
     table from the released test split or state which dataset version produced it.
-12. `yolo_rgbih_tile/` ships no data YAML, so the released dataset cannot be used with
+7. `yolo_rgbih_tile/` ships no data YAML, so the released dataset cannot be used with
     `yolo_train` or `yolo_eval` without the user writing one (§3.4). Include it in the deposit.

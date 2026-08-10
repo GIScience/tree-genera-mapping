@@ -67,12 +67,17 @@ python tree_genera_mapping/scripts/fetch_tiles.py \
 
 2. Run pre-trained YOLOv11l model to detect and classify tree genus:
 ```bash
-python tree_genera_mapping/scripts/predict_yolo.py \ 
-  --tiles-gpkg data/tiles.gpkg \
-  --images-dir cache/dataset_dir \
-  --model-path cache/yolov11l_tree_genus.pth \
-  --output-dir cache/predictions
+python -m tree_genera_mapping.scripts.predict_yolo \
+  --tile-dir cache/img_dir \
+  --ckpt-path cache/weights/yolo11l_tree_genus.pt \
+  --output-dir cache/predictions \
+  --patch-size 1024 --stride 896 --imgsz 1024 \
+  --conf 0.30 --iou 0.4
 ```
+
+Omit `--tile-id` as above to process every TIFF in `--tile-dir`, or pass it to
+process one tile. Predictions are written as `tile_<tile_id>.gpkg` files ready
+for `finalize_results.py`.
 
 ## Train Model
 1. Data Preparation
@@ -98,11 +103,15 @@ python tree_genera_mapping/scripts/predict_yolo.py \
       **Note**: `yolo_train.py` expects plain TIFF images (Non-GeoTIFF). If your source imagery is stored as GeoTIFF, run the dataset builder with the --plain-tiff flag so that geospatial metadata is removed during chip generation.
 
    ii. Classification dataset (crown-centred genus patches):
+
+   Download `greehill_genera.csv` from the
+   [heiDATA dataset](https://doi.org/10.11588/DATA/MKZPUY) and place it at
+   `data/greehill_genera.csv` before running this step.
    
    ```bash
      python -m tree_genera_mapping.scripts.build_dataset cls \
       --tiles-gpkg data/tiles.gpkg \
-      --genus-labels-csv /greehill_genera.csv \
+      --genus-labels-csv data/greehill_genera.csv \
       --split-csv data/greehill_genera_split.csv \
       --images-dir cache/img_dir \
       --output-dir cache/patches_dir \

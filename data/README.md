@@ -76,6 +76,12 @@ training entirely. Used only for the domain-shift experiment.
 classification dataset builder consumes, which is why the genus classifier and the crown
 detector share one partition.
 
+The corresponding reference table, `greehill_genera.csv`, is not stored in this Git
+repository. Download it from the
+[heiDATA dataset](https://doi.org/10.11588/DATA/MKZPUY) and place it at
+`data/greehill_genera.csv`. The committed split table is joined to this downloaded file by
+`tree_id`.
+
 `subtiles_split.txt` — columns `subtile_id`, `split`, `size`, `overlap`. 3,497 subtiles
 (2,934 train / 344 val / 219 test), each inheriting its parent tile's partition. This
 count includes negative subtiles with no annotated trees; the annotated subset is 2,965.
@@ -104,10 +110,11 @@ testing: 640 × 640 pixels, `uint8`, band order RGB, NIR, above-ground height. T
 the pretrained model to be exercised without any LGL download — see
 `notebooks/01_demo_inference.ipynb`.
 
-The height band is scaled per tile rather than on fixed bounds, so its byte values are not
-directly interpretable in metres; `predict_yolo.py` decodes them using the per-tile
-`raw_height_stats` recorded in the accompanying `.height.json` sidecar. See
-`docs/README.md` §3.1.
+The included samples use the fixed global 0–80 m height encoding documented in
+`docs/README.md` §3.1 and therefore need no sidecars. For locally normalized downloaded
+tiles, `fetch_tiles.py` writes `<tile>.json` containing `height_channel.stats_m`, which
+`predict_yolo.py` uses to decode the height band back to metres. The legacy
+`<tile>.height.json` / `raw_height_stats` format is also supported.
 
 ## 5. Ancillary layers (not version-controlled)
 

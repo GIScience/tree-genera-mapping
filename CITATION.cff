@@ -12,12 +12,12 @@ authors:
     family-names: Grinblat
     email: yulia.grinblat@heigit.org
     affiliation: HeiGIT gGmbH / Heidelberg University
-    orcid: 'https://orcid.org/0000-0000-0000-0000'
+    orcid: 'https://orcid.org/0009-0002-4547-7569'
   - given-names: Nir
     family-names: Fulman
     email: nir.fulman@uni-heidelberg.de
     affiliation: HeiGIT gGmbH / Heidelberg University
-    orcid: 'https://orcid.org/0000-0000-0000-0000'
+    orcid: 'https://orcid.org/0000-0002-2629-2641'
 date-released: '2026-01-26'
 version: 1.0.0
 url: 'https://github.com/GIScience/tree-genera-mapping'
@@ -57,4 +57,3 @@ preferred-citation:
       family-names: Fulman
   journal: Scientific Data
   year: 2026
-  doi: 10.0000/PLACEHOLDER
