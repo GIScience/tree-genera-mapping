@@ -145,7 +145,9 @@ def resolve_tile_inputs(values: List[str]) -> List[str]:
 
         # Case 1: file
         if p.exists():
-            df = pd.read_csv(p, sep=None, engine="python", dtype=str)
+            first_line = p.read_text(encoding="utf-8").splitlines()[0]
+            separator = next((sep for sep in (",", "\t", ";") if sep in first_line), ",")
+            df = pd.read_csv(p, sep=separator, dtype=str)
             df.columns = [c.strip() for c in df.columns]
 
             if "tile_id" in df.columns:

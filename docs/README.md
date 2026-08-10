@@ -34,7 +34,8 @@ Intermediate outputs are written to `cache/`, which is git-ignored.
 tree_genera_mapping/
   scripts/         fetch_tiles, segment_crowns, build_dataset,
                    predict_teacher, predict_yolo, compute_channel_stats, 
-                   build_tof_roi, compute_agg_indicators, finalize_results
+                   build_tof_roi, select_inference_tiles,
+                   compute_agg_indicators, finalize_results
   preprocess/      genus_labels, height_model, detection_dataset, utils
   dl/
     detection/     tree_train, tree_eval        (Faster R-CNN teacher)
@@ -423,7 +424,7 @@ python -m tree_genera_mapping.scripts.finalize_results \
 ### 5.11 Aggregated indicators
 
 ```bash
-python -m tree_genera_mapping.scripts.aggregate_indicators \
+python -m tree_genera_mapping.scripts.compute_agg_indicators \
   --trees-gpkg cache/trees_bw.gpkg --trees-layer trees \
   --grid-gpkg data/grid_pop_bw_100.gpkg --population-col Einwohner \
   --municipalities-shp data/geb01_f.shp \

@@ -89,19 +89,10 @@ partition. Of these, 148 are negative subtiles with no annotated trees.
 `subtiles_ids.txt` — the deduplicated plain list of subtile identifiers, for steps that
 need the inventory of subtiles without their partition.
 
-Both split tables can be regenerated with:
-
-```bash
-python -m tree_genera_mapping.scripts.make_splits \
-  --reference-csv data/greehill_genera.csv \
-  --tiles-gpkg data/tiles.gpkg \
-  --strategy tile --stratify-col city \
-  --out-tiles data/tiles_split.txt \
-  --out-trees data/greehill_genera_split.csv
-```
-
-Always pass a split table to `build_dataset`. The `--val-frac` / `--test-frac` fallbacks
-perform a **random** split and will not reproduce the published partition.
+The committed `tiles_split.txt` and `greehill_genera_split.csv` files are the authoritative
+publication partitions and should be used directly. Always pass a split table to
+`build_dataset`: the `--val-frac` / `--test-frac` fallbacks perform a **random** split and
+will not reproduce the published partition.
 
 ## 4. Image samples
 

@@ -23,7 +23,7 @@ the choice is explicit rather than implied.
 
 Example
 -------
-    python -m tree_genera_mapping.scripts.aggregate_indicators \\
+    python -m tree_genera_mapping.scripts.compute_agg_indicators \\
         --trees-gpkg cache/trees_bw.gpkg --trees-layer trees \\
         --grid-gpkg data/grid_pop_bw_100.gpkg --population-col Einwohner \\
         --municipalities-shp data/geb01_f.shp \\

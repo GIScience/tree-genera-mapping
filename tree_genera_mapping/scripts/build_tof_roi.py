@@ -17,7 +17,7 @@ Expected result for Baden-Wuerttemberg:
 
 Example
 -------
-    python -m tree_genera_mapping.scripts.build_nonforest_roi \\
+    python -m tree_genera_mapping.scripts.build_tof_roi \\
         --boundary-shp data/geb01_f.shp \\
         --forest-shp data/veg02_f.shp \\
         --output cache/bw_nonforest_roi.gpkg
