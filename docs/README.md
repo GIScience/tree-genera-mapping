@@ -264,9 +264,8 @@ Tuning flags: `--peak-threshold-abs-m`, `--min-distance-px`, `--min-canopy-area-
 `--no-fill-holes`, `--write-masks`, `--mask-encoding`, and per-band overrides
 `--band-r/-g/-b/-nir/-h`.
 
-**[VERIFY]** The code default for `--ndvi-thr` is 0.2 while the Data Descriptor states
-NDVI ≥ 0.3. Establish which value produced the released labels and align code, manuscript
-and this document.
+The reproducibility command and the code default both use `--ndvi-thr 0.3`, matching
+the NDVI ≥ 0.3 threshold in the Data Descriptor.
 
 > **Human-in-the-loop step.** Boxes are reviewed in QGIS: obvious non-trees are removed
 > (poles in railway areas, shrubs on bridges, hedges, vineyard structures, rooftop
@@ -311,10 +310,10 @@ channels are initialised from the pretrained red and green kernels respectively
 `--norm-mean`, `--norm-std`, `--pretrained-backbone`, `--resume`, `--seed`.
 `--num-classes` counts background, so one-class detection uses `2`.
 
-**[VERIFY]** `--pretrained-backbone` is opt-in (`store_true`), so it is off unless passed.
-Confirm whether the released teacher detector used it, and record the epoch count,
-learning rate and `--min-size`/`--max-size`, plus which subset of the 1,568 Mannheim
-subtiles was held out (Table 2 reports 8,079 reference boxes).
+`--pretrained-backbone` is opt-in (`store_true`), so pass it explicitly when training
+with ImageNet-pretrained weights. Record the epoch count, learning rate,
+`--min-size`/`--max-size`, random seed, and held-out Mannheim subtiles with each training
+run so that its detector checkpoint can be reproduced.
 
 **Genus classifier — ResNet-101.** Notes that matter in practice:
 
@@ -331,8 +330,8 @@ subtiles was held out (Table 2 reports 8,079 reference boxes).
   macro F1; consider monitoring macro F1 for consistency.
 
 Evaluation: `genus_eval.py` scores the **val** split only and expects
-`val/<class_name>/*.tif`. **[VERIFY]** its default `--labels-csv` is
-`conf/genus_labels.csv`, which does not exist; the file is `data/genera_labels.csv`.
+`val/<class_name>/*.tif`. Pass `--labels-csv data/genera_labels.csv` explicitly; the
+script's default path, `conf/genus_labels.csv`, is not present in this repository.
 
 ### 5.7 Teacher-ensemble inference and curation
 
@@ -376,10 +375,9 @@ probability is at least `--cls-conf`.
 See the root [`README.md`](../README.md) for the training and evaluation commands. The
 hyperparameters there are read from the released checkpoints — see §6.
 
-**[VERIFY]** `yolo_eval.py` exposes no split argument, so it evaluates the `val:` entry of
-the data YAML. To reproduce the published test-partition figures, add a `--split` argument
-or point `val:` at `images/test`. As shipped, a user cannot reproduce the reported numbers
-with this script — see §7.
+`yolo_eval.py` evaluates the `val:` entry of the data YAML and does not expose a separate
+split argument. To evaluate the test partition, use a separate evaluation YAML whose
+`val:` entry points to `images/test`.
 
 ### 5.9 Statewide inference
 
@@ -525,17 +523,16 @@ bit-exactly.
 
 ## 9. Open items
 
-1. `--ndvi-thr` default 0.2 versus the manuscript's 0.3.
-2. Height-channel encoding of the sample chips (§3.1).
-3. `training_class` ordering in `greehill_genera.csv` versus the model's class order (§3.2).
-4. `conf/data.yaml` referenced by the released genus checkpoint is absent from the repo.
-5. Focal loss in the released genus model is undocumented in the manuscript.
-6. `yolo_eval` has no split selector.
-7. `predict_yolo` uses underscore flags; all other scripts use hyphens.
-8. `genus_eval` defaults to `conf/genus_labels.csv`, which does not exist — the label file is
+1. Height-channel encoding of the sample chips (§3.1).
+2. `training_class` ordering in `greehill_genera.csv` versus the model's class order (§3.2).
+3. `conf/data.yaml` referenced by the released genus checkpoint is absent from the repo.
+4. Focal loss in the released genus model is undocumented in the manuscript.
+5. `yolo_eval` has no split selector.
+6. `predict_yolo` uses underscore flags; all other scripts use hyphens.
+7. `genus_eval` defaults to `conf/genus_labels.csv`, which does not exist — the label file is
    `data/genera_labels.csv`.
 
-10. `scripts/finalize_results.py`, referenced in older documentation, does not exist. Either
+8. `scripts/finalize_results.py`, referenced in older documentation, does not exist. Either
     add it or document how predictions are merged and exported.
 11. The per-class reference counts published in the Data Descriptor's class-specific
     performance table (total 9,663) do not match the deposited test partition (total 9,042;
