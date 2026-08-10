@@ -535,9 +535,5 @@ bit-exactly.
 2. `conf/data.yaml` referenced by the released genus checkpoint is absent from the repo.
 3. Focal loss in the released genus model is undocumented in the manuscript.
 4. `yolo_eval` has no split selector.
-5. The per-class reference counts published in the Data Descriptor's class-specific
-    performance table (total 9,663) do not match the deposited test partition (total 9,042;
-    see §3.4). Since the dataset is released, this is checkable by any reader. Recompute the
-    table from the released test split or state which dataset version produced it.
-6. `yolo_rgbih_tile/` ships no data YAML, so the released dataset cannot be used with
+5. `yolo_rgbih_tile/` ships no data YAML, so the released dataset cannot be used with
     `yolo_train` or `yolo_eval` without the user writing one (§3.4). Include it in the deposit.
