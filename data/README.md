@@ -82,12 +82,12 @@ repository. Download it from the
 `data/greehill_genera.csv`. The committed split table is joined to this downloaded file by
 `tree_id`.
 
-`subtiles_split.txt` — columns `subtile_id`, `split`, `size`, `overlap`. 3,497 subtiles
-(2,934 train / 344 val / 219 test), each inheriting its parent tile's partition. This
-count includes negative subtiles with no annotated trees; the annotated subset is 2,965.
+`subtiles_split.txt` — columns `subtile_id`, `split`, `size`, `overlap`. It contains 2,965
+unique subtiles (2,482 train / 297 val / 186 test), each inheriting its parent tile's
+partition. Of these, 148 are negative subtiles with no annotated trees.
 
-`subtiles_ids.txt` — the plain list of subtile identifiers, for steps that need the
-inventory of subtiles without their partition.
+`subtiles_ids.txt` — the deduplicated plain list of subtile identifiers, for steps that
+need the inventory of subtiles without their partition.
 
 Both split tables can be regenerated with:
 

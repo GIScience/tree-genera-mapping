@@ -99,9 +99,9 @@ containing trees from more than one partition, and the resulting per-tile assign
 identical to `data/tiles_split.txt`. No tile contributes data to more than one partition at
 any stage.
 
-`data/subtiles_split.txt` contains 3,497 subtiles (2,934 train / 344 val / 219 test), each
-inheriting its parent tile's partition. This count includes negative subtiles with no
-annotated trees; the annotated subset is smaller.
+`data/subtiles_split.txt` contains 2,965 unique subtiles (2,482 train / 297 val / 186 test),
+each inheriting its parent tile's partition. Of these, 148 are negative subtiles with no
+annotated trees.
 
 `data/tiles_split_city.txt` holds the alternative city-to-city assignment (Mannheim +
 Karlsruhe for training, Freiburg held out).

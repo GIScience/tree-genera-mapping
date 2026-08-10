@@ -188,7 +188,8 @@ python -m tree_genera_mapping.dl.detection.yolo_train \
 python -m tree_genera_mapping.dl.detection.yolo_eval \
        --weights cache/weights/yolo11l_tree_genus.pt \
        --data conf/data_genera.yaml \
-       --imgsz 1024 --conf 0.30 --iou 0.5 --save-cm
+       --imgsz 1024 --conf 0.30 --iou 0.5 \
+       --save-cm cache/yolo_confusion_matrix.npy
 ```
 
 Full pipeline documentation, data conventions and reproducibility notes are in `docs/README.md`.
