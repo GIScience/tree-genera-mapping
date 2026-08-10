@@ -247,7 +247,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--band-nir", type=int, default=4)
     ap.add_argument("--band-h", type=int, default=5)
 
-    ap.add_argument("--ndvi-thr", type=float, default=0.2)
+    ap.add_argument("--ndvi-thr", type=float, default=0.3)
     ap.add_argument("--height-thr", type=float, default=2.0)
     ap.add_argument("--min-canopy-area-px", type=int, default=10)
 

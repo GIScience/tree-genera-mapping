@@ -37,7 +37,7 @@ from skimage.segmentation import watershed
 
 @dataclass(frozen=True)
 class MaskParams:
-    ndvi_thr: float = 0.2
+    ndvi_thr: float = 0.3
     height_thr_m: float = 2.0
     min_canopy_area_px: int = 10
 
