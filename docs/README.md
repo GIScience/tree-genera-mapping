@@ -228,12 +228,12 @@ difference between the ROI and the municipality-level mapped-area total of 21,66
 
 ```bash
 python -m tree_genera_mapping.scripts.select_inference_tiles \
-  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --tiles-gpkg data/tiles.gpkg \
   --roi-gpkg cache/bw_nonforest_roi.gpkg \
   --output data/inference_tiles.txt
 
 python -m tree_genera_mapping.scripts.fetch_tiles \
-  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --tiles-gpkg data/tiles.gpkg \
   --tile-ids data/inference_tiles.txt \
   --tmp-root cache/tmp \
   --output-dir cache/img_dir \
@@ -336,10 +336,35 @@ Evaluation: `genus_eval.py` scores the **val** split only and expects
 
 ### 5.7 Teacher-ensemble inference and curation
 
-`predict_teacher.py` takes `--tile-dir`, `--ckpt-paths`, `--output-dir`, `--patch-size`,
-`--image-patch-size`, `--stride`, `--conf`, `--iou`. Faster R-CNN proposes crown boxes;
-each box's patch is resized to 128 × 128 and classified by ResNet-101. A box and its class
-are kept together only when both confidences exceed their thresholds.
+```bash
+python -m tree_genera_mapping.scripts.predict_teacher \
+  --tile-dir cache/img_dir \
+  --ckpt-paths cache/models/frcnn_tree/best_model.pth \
+               cache/models/resnet101_5ch/image_only_best.pt \
+  --output-dir cache/pseudo_labels \
+  --patch-size 640 \
+  --image-patch-size 128 \
+  --stride 512 \
+  --det-conf 0.30 \
+  --cls-conf 0.30 \
+  --iou 0.50
+```
+
+`--ckpt-paths` takes exactly two checkpoints in this order: the Faster R-CNN
+crown detector followed by the ResNet genus classifier. Faster R-CNN proposes
+crown boxes over overlapping windows and global non-maximum suppression removes
+duplicates. Each retained box is cropped directly from the same in-memory
+five-channel RGBIH tile tensor, resized to 128 × 128, normalized with the
+classifier checkpoint statistics, and classified by ResNet-101. No separate
+classifier image path is required.
+
+Omit `--tile-id` to process every `rgbih_*.tif` file under `--tile-dir`, or pass
+one tile such as `--tile-id 32_413_5320`. The script writes one
+`teacher_rgbih_<tile_id>.gpkg` per input tile. Each output contains
+`top1_class`, `top1_class_id`, detector and classifier confidence, all per-class
+probabilities, and georeferenced crown boxes. A prediction is retained only
+when its detector confidence is at least `--det-conf` and its top-one classifier
+probability is at least `--cls-conf`.
 
 > **Human-in-the-loop step.** Pseudo-labels are reviewed and corrected in QGIS, then saved
 > as `cache/curated_pseudo_labels.gpkg`. Duplicate annotations arising from subtile overlap

@@ -140,11 +140,25 @@ python -m tree_genera_mapping.dl.classification.genus_train \
 ```bash
 python -m tree_genera_mapping.scripts.predict_teacher \
        --tile-dir cache/img_dir \
-       --ckpt-paths cache/models/frcnn_tree/best.pt \
+       --ckpt-paths cache/models/frcnn_tree/best_model.pth \
                     cache/models/resnet101_5ch/image_only_best.pt \
        --output-dir cache/pseudo_labels \
-       --patch-size 640 --image-patch-size 128 --stride 512 --conf 0.3 --iou 0.5
+       --patch-size 640 \
+       --image-patch-size 128 \
+       --stride 512 \
+       --det-conf 0.30 \
+       --cls-conf 0.30 \
+       --iou 0.50
  ```
+
+`--ckpt-paths` takes exactly two checkpoints in this order: the Faster R-CNN
+crown detector followed by the ResNet genus classifier. The classifier crops
+are extracted directly from each in-memory RGBIH tile tensor, so no additional
+classifier image directory is required. Omit `--tile-id` to process every
+`rgbih_*.tif` file under `--tile-dir`, or pass a single tile such as
+`--tile-id 32_413_5320`. The script writes one
+`teacher_rgbih_<tile_id>.gpkg` file per tile with `top1_class`, detector and
+classifier confidence, and per-class probabilities.
 
 Pseudo-labels are then reviewed and corrected in QGIS before use — see `docs/README.md`.
 

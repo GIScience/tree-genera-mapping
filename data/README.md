@@ -88,7 +88,7 @@ Both split tables can be regenerated with:
 ```bash
 python -m tree_genera_mapping.scripts.make_splits \
   --reference-csv data/greehill_genera.csv \
-  --tiles-gpkg data/lgl_bw_tiles.gpkg \
+  --tiles-gpkg data/tiles.gpkg \
   --strategy tile --stratify-col city \
   --out-tiles data/tiles_split.txt \
   --out-trees data/greehill_genera_split.csv
