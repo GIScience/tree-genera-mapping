@@ -87,7 +87,7 @@ def main() -> None:
 
     ap.add_argument("--out-dir", required=True, help="Run directory that contains <experiment>_best.pt")
     ap.add_argument("--images-dir", required=True, help="Dataset root (expects val/<class_name>/*.tif)")
-    ap.add_argument("--labels-csv", default="conf/genus_labels.csv", help="Label mapping CSV")
+    ap.add_argument("--labels-csv", default="data/genera_labels.csv", help="Label mapping CSV")
 
     ap.add_argument("--experiment", choices=["image_only", "multimodal"], default="image_only")
     ap.add_argument("--ckpt-name", default=None, help="Override checkpoint filename (default: <experiment>_best.pt)")
